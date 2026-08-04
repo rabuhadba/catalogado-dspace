@@ -1,0 +1,14 @@
+# Secretos
+.env
+
+# Dependencias y compilados
+__pycache__/
+*.pyc
+
+# Descargas pesadas portables (no subir a Github)
+jdk/
+maven/
+SAFBuilder-master/
+
+# Archivos de datos generados y carpetas temporales
+SimpleArchiveFormat/
