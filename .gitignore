@@ -1,14 +1,27 @@
-# Secretos
+# Secretos y variables de entorno
 .env
 
-# Dependencias y compilados
+# Entornos virtuales y temporales de Python
 __pycache__/
 *.pyc
+*.pyo
+.venv/
+venv/
 
-# Descargas pesadas portables (no subir a Github)
+# Archivos de datos, imágenes y SAF (No subir a GitHub)
+Fotos/
+fotos/
+SimpleArchiveFormat/
+SAF/
+*.csv
+
+# Binarios y JDK pesados
 jdk/
 maven/
 SAFBuilder-master/
 
-# Archivos de datos generados y carpetas temporales
-SimpleArchiveFormat/
+# Archivos del sistema u oficina
+Thumbs.db
+.DS_Store
+*.lock
+.~lock.*

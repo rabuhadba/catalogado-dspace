@@ -145,9 +145,15 @@ print("\nPreparando el CSV para SAFBuilder oficial...")
 # 1. Leer el CSV final
 df_saf = pd.read_csv(CSV_SALIDA)
 
-# 2. Renombrar la columna 'nombre archivo' a 'filename'
+# 2. Renombrar columnas clave para SAFBuilder
+renombres = {}
 if 'nombre archivo' in df_saf.columns:
-    df_saf.rename(columns={'nombre archivo': 'filename'}, inplace=True)
+    renombres['nombre archivo'] = 'filename'
+if 'Colección' in df_saf.columns:
+    renombres['Colección'] = 'collections'
+
+if renombres:
+    df_saf.rename(columns=renombres, inplace=True)
 
 # 3. Añadir el prefijo 'Fotos/' a las rutas de los archivos
 # Asegurarnos de que no lo hemos añadido ya en una ejecución anterior
@@ -159,6 +165,15 @@ df_saf['filename'] = df_saf['filename'].apply(
 CSV_SAF = "Catalogo_SAFBuilder.csv"
 df_saf.to_csv(CSV_SAF, index=False, encoding='utf-8')
 print(f"CSV para SAFBuilder generado: {CSV_SAF}")
+
+# 4.5. Guardar un CSV solo con las nuevas columnas generadas por OpenAI
+columnas_nuevas = ['filename', 'dc.title', 'dc.title.alternative', 'dc.description', 'dc.description.abstract']
+columnas_existentes = [col for col in columnas_nuevas if col in df_saf.columns]
+if columnas_existentes:
+    df_nuevas = df_saf[columnas_existentes].copy()
+    CSV_NUEVAS = "Catalogo_OpenAI_NuevasColumnas.csv"
+    df_nuevas.to_csv(CSV_NUEVAS, index=False, encoding='utf-8')
+    print(f"CSV solo con columnas nuevas generado: {CSV_NUEVAS}")
 
 # 5. Ejecutar SAFBuilder con Java descargado localmente
 print("\nIniciando SAFBuilder (esto puede tomar unos segundos)...")
