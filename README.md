@@ -6,7 +6,7 @@ El script procesa lotes de imágenes, analiza su contenido visual y contexto, y 
 
 ---
 
-## 🛠 Características Principales
+## Características Principales
 
 - **Análisis Visual con IA**: Generación de títulos alternativos y resúmenes descriptivos estructurados mediante GPT-4o-mini.
 - **Empaquetado Automático SAF**: Invocación transparente a SAFBuilder (Java) para construir la estructura de items con `dublin_core.xml` y `contents`.
