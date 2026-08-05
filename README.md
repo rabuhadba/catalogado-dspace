@@ -1,4 +1,4 @@
-# Catalogador Automático DSpace con OpenAI 📸🤖
+# Catalogador Automático DSpace con OpenAI 
 
 Esta herramienta automatiza la catalogación masiva de colecciones fotográficas utilizando Inteligencia Artificial (**OpenAI GPT-4o-mini**) y empaqueta los resultados en el formato **Simple Archive Format (SAF)** oficial, listos para ser importados a repositorios institucionales [DSpace](https://dspace.lyrasis.org/).
 
@@ -15,7 +15,7 @@ El script procesa lotes de imágenes, analiza su contenido visual y contexto, y 
 
 ---
 
-## 📦 Requisitos Previos
+## Requisitos Previos
 
 - **Python 3.8+** (Asegúrate de marcar "Add Python to PATH" durante la instalación).
 - **Windows** (el script de instalación `.bat` está optimizado para entornos Windows).
@@ -23,7 +23,7 @@ El script procesa lotes de imágenes, analiza su contenido visual y contexto, y 
 
 ---
 
-## 🚀 Instalación y Configuración (Primera Vez)
+## Instalación y Configuración (Primera Vez)
 
 1. **Clona o descarga** este repositorio en tu PC.
 2. Ejecuta haciendo doble clic el archivo `instalar_entorno.bat`:
@@ -43,7 +43,7 @@ El script procesa lotes de imágenes, analiza su contenido visual y contexto, y 
 
 ---
 
-## 💡 Uso del Proyecto
+## Uso del Proyecto
 
 ### 1. Verificar Conexión a DSpace (Opcional)
 Para comprobar que la URL y credenciales de DSpace respondan correctamente:
@@ -64,7 +64,7 @@ El proceso genera localmente:
 
 ---
 
-## 📂 Estructura del Repositorio
+##  Estructura del Repositorio
 
 ```
 CATALOGADO DSPACE/
@@ -77,14 +77,3 @@ CATALOGADO DSPACE/
 ├── lib/                        # Ejecutable SAFBuilder JAR
 └── README.md                   # Documentación del proyecto
 ```
-
----
-
-## 🔒 Ignorados por Git (`.gitignore`)
-
-Por seguridad y eficiencia, los siguientes elementos **NO** se suben al repositorio en GitHub:
-- `.env` (credenciales y llaves de API).
-- `Fotos/` o `fotos/` (imágenes locales de prueba/catalogación).
-- `SimpleArchiveFormat/` o `SAF/` (paquetes binarios de salida).
-- Archivos `*.csv` (tablas de datos generadas).
-- `jdk/` y librerías temporales pesadas.
