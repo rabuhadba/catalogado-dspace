@@ -284,7 +284,17 @@ def main():
             except Exception as e:
                 print(f"❌ Error al borrar SAF: {e}")
                 
-        print("✅ Limpieza terminada. ¡Solo quedaron los CSV de respaldo!")
+        # Borrar todos los CSV excepto Catalogo_OpenAI_Completo.csv
+        try:
+            for arch in os.listdir(carpeta_proyecto):
+                if arch.lower().endswith('.csv') and arch != "Catalogo_OpenAI_Completo.csv":
+                    ruta_arch = os.path.join(carpeta_proyecto, arch)
+                    os.remove(ruta_arch)
+                    print(f"🗑️  Archivo temporal '{arch}' eliminado.")
+        except Exception as e:
+            print(f"❌ Error al borrar CSVs temporales: {e}")
+                
+        print("✅ Limpieza terminada. ¡Solo quedó el archivo Catalogo_OpenAI_Completo.csv!")
     else:
         print("Conservando los archivos locales intactos.")
 
