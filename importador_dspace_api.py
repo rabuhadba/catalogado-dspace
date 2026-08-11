@@ -252,9 +252,41 @@ def main():
         # if resp_wf.status_code in [200, 201, 204]:
         #     print("  -> ✅ Ítem publicado exitosamente en la colección.")
         # else:
-        #     print(f"  -> ⚠️ Advertencia: No se pudo auto-publicar el ítem (Status {resp_wf.status_code}): {resp_wf.text}")
+            # print(f"  -> ⚠️ Advertencia: No se pudo auto-publicar el ítem (Status {resp_wf.status_code}): {resp_wf.text}")
             
     print(f"\n✅ Proceso completado. Se intentó cargar {items_procesados} ítems.")
+    
+    # ---------------------------------------------------------
+    # LIMPIEZA FINAL DE ARCHIVOS PESADOS
+    # ---------------------------------------------------------
+    print("\n=========================================================")
+    print("      LIMPIEZA DE ESPACIO LOCAL                          ")
+    print("=========================================================")
+    print("Los borradores ya están seguros en la nube de DSpace.")
+    limpiar = input("¿Deseas borrar las fotos locales y el paquete SAF para liberar espacio? (Se conservarán los CSV) [S/N]: ").strip().upper()
+    
+    if limpiar == 'S':
+        import shutil
+        carpeta_proyecto = os.path.join("Proyectos", NOMBRE_PROYECTO)
+        
+        carpeta_fotos = os.path.join(carpeta_proyecto, "Fotos")
+        if os.path.exists(carpeta_fotos):
+            try:
+                shutil.rmtree(carpeta_fotos)
+                print(f"🗑️  Carpeta '{carpeta_fotos}' eliminada.")
+            except Exception as e:
+                print(f"❌ Error al borrar Fotos: {e}")
+                
+        if os.path.exists(SAF_DIR):
+            try:
+                shutil.rmtree(SAF_DIR)
+                print(f"🗑️  Carpeta '{SAF_DIR}' eliminada.")
+            except Exception as e:
+                print(f"❌ Error al borrar SAF: {e}")
+                
+        print("✅ Limpieza terminada. ¡Solo quedaron los CSV de respaldo!")
+    else:
+        print("Conservando los archivos locales intactos.")
 
 if __name__ == "__main__":
     main()
