@@ -86,8 +86,14 @@ def leer_metadatos_csv(csv_path):
         print(f"Columnas disponibles: {list(df.columns)}")
         exit(1)
     
-    # Columnas que son metadatos DSpace (empiezan con dc. o fia. o similares)
-    columnas_metadatos = [c for c in df.columns if '.' in c and c != col_archivo]
+    # Limpiar nombres de columna (quitar espacios al inicio/final)
+    df.columns = [c.strip() for c in df.columns]
+    col_archivo = col_archivo.strip()
+    
+    # Columnas que son metadatos DSpace (contienen un punto, como dc.title o fia.region)
+    # Excluir columnas que no son metadatos reales
+    columnas_excluir = {col_archivo, 'dspace.entity.type'}
+    columnas_metadatos = [c for c in df.columns if '.' in c and c not in columnas_excluir]
     
     for _, row in df.iterrows():
         nombre_archivo = str(row[col_archivo]).strip()
@@ -98,9 +104,11 @@ def leer_metadatos_csv(csv_path):
         for col in columnas_metadatos:
             valor = str(row.get(col, '')).strip()
             if valor and valor != 'nan':
-                if col not in metadatos:
-                    metadatos[col] = []
-                metadatos[col].append({"value": valor})
+                # Campos multivaluados separados por || se envian como valores independientes
+                if '||' in valor:
+                    metadatos[col] = [{"value": v.strip()} for v in valor.split('||') if v.strip()]
+                else:
+                    metadatos[col] = [{"value": valor}]
         
         items.append({
             "nombre_archivo": nombre_archivo,
@@ -208,26 +216,26 @@ def main():
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"{item_uuid}\n")
         
-        # 2. Aplicar Metadatos mediante PATCH directo al Item
-        patch_ops = []
-        for campo, valores in metadatos.items():
-            for valor_dict in valores:
-                patch_ops.append({
-                    "op": "add",
-                    "path": f"/metadata/{campo}",
-                    "value": valor_dict
-                })
-        
-        if patch_ops:
+        # 2. Aplicar Metadatos campo por campo (si uno falla, los demas siguen)
+        if metadatos:
             patch_headers = api_headers.copy()
             patch_headers["Content-Type"] = "application/json"
             patch_url = f"{DSPACE_URL}/core/items/{item_uuid}"
             
-            resp_patch = session.patch(patch_url, headers=patch_headers, json=patch_ops)
-            if resp_patch.status_code == 200:
-                print("  -> Metadatos aplicados correctamente.")
+            campos_ok = 0
+            campos_error = 0
+            for campo, valores in metadatos.items():
+                patch_op = [{"op": "add", "path": f"/metadata/{campo}", "value": valores}]
+                resp_patch = session.patch(patch_url, headers=patch_headers, json=patch_op)
+                if resp_patch.status_code == 200:
+                    campos_ok += 1
+                else:
+                    campos_error += 1
+            
+            if campos_error > 0:
+                print(f"  -> Metadatos: {campos_ok} OK, {campos_error} rechazados por DSpace.")
             else:
-                print(f"  -> Error aplicando metadatos: {resp_patch.text}")
+                print(f"  -> Metadatos aplicados correctamente ({campos_ok} campos).")
         
         # 3. Subir Foto (Bitstream)
         ruta_foto = buscar_foto(nombre_archivo, PROYECTO_DIR)
