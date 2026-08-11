@@ -259,12 +259,8 @@ def main():
         else:
             print(f"  -> ADVERTENCIA: No se encontro la foto {nombre_archivo} en disco.")
         
-        # 4. Aceptar licencia
-        license_patch = [{"op": "add", "path": "/sections/license/granted", "value": "true"}]
-        patch_headers = api_headers.copy()
-        patch_headers["Content-Type"] = "application/json"
-        session.patch(f"{DSPACE_URL}/submission/workspaceitems/{ws_id}", headers=patch_headers, json=license_patch)
         
+
         items_ok += 1
     
     print(f"\n=========================================================")
