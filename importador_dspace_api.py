@@ -276,7 +276,17 @@ def main():
                 print(f"🗑️  Carpeta '{carpeta_fotos}' eliminada.")
             except Exception as e:
                 print(f"❌ Error al borrar Fotos: {e}")
-                
+        else:
+            # Si no existe la carpeta "Fotos", significa que las fotos están sueltas en la raíz del proyecto.
+            # Borramos todos los archivos de imagen directamente.
+            exts_imagen = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.tiff')
+            try:
+                for arch in os.listdir(carpeta_proyecto):
+                    if arch.lower().endswith(exts_imagen):
+                        os.remove(os.path.join(carpeta_proyecto, arch))
+                print(f"🗑️  Imágenes sueltas eliminadas de '{carpeta_proyecto}'.")
+            except Exception as e:
+                print(f"❌ Error al borrar imágenes sueltas: {e}")
         if os.path.exists(SAF_DIR):
             try:
                 shutil.rmtree(SAF_DIR)
