@@ -11,6 +11,7 @@ venv/
 # Archivos de datos, imágenes y SAF (No subir a GitHub)
 Fotos/
 fotos/
+Proyectos/
 SimpleArchiveFormat/
 SAF/
 *.csv
