@@ -299,14 +299,6 @@ def main():
                 except Exception as e:
                     print(f"  Error al borrar imagenes: {e}")
             
-            # Borrar carpeta SAF residual si existe (de ejecuciones anteriores)
-            saf_dir = os.path.join(PROYECTO_DIR, "SimpleArchiveFormat")
-            if os.path.exists(saf_dir):
-                try:
-                    shutil.rmtree(saf_dir)
-                    print(f"  Carpeta SAF residual eliminada.")
-                except Exception as e:
-                    print(f"  Error al borrar SAF: {e}")
             
             # Borrar todos los CSV excepto Catalogo_OpenAI_Completo.csv
             try:
