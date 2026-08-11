@@ -251,8 +251,15 @@ saf_dir = os.path.dirname(os.path.abspath(__file__))
 csv_absoluto = os.path.abspath(CSV_SAF)
 
 try:
-    # Llamada directa al JAR usando Java local, evitando problemas con los .bat de Windows
-    java_exe = os.path.join(saf_dir, 'jdk', 'jdk-21.0.3+9', 'bin', 'java.exe')
+    # Llamada directa al JAR usando Java local de forma dinámica
+    import glob
+    java_exe_paths = glob.glob(os.path.join(saf_dir, 'jdk', '**', 'bin', 'java.exe'), recursive=True)
+    if not java_exe_paths:
+        print("❌ Error: No se encontró java.exe en la carpeta 'jdk'.")
+        print("Asegúrate de haber ejecutado instalar_entorno.bat en este computador.")
+        exit(1)
+    
+    java_exe = java_exe_paths[0]
     jar_file = os.path.join(saf_dir, 'lib', 'safbuilder.jar')
     comando = f'"{java_exe}" -jar "{jar_file}" -c "{csv_absoluto}"'
     
