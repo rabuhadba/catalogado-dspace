@@ -216,6 +216,13 @@ def main():
         # 3. Subir Archivos (Bitstreams)
         for archivo in archivos:
             ruta_archivo = os.path.join(ruta_item, archivo)
+            # Falla de seguridad: si SAFBuilder no copió la foto (porque no existía la carpeta Fotos),
+            # la buscamos directamente en la raíz del proyecto o en su carpeta Fotos.
+            if not os.path.exists(ruta_archivo):
+                ruta_archivo = os.path.join("Proyectos", NOMBRE_PROYECTO, archivo)
+            if not os.path.exists(ruta_archivo):
+                ruta_archivo = os.path.join("Proyectos", NOMBRE_PROYECTO, "Fotos", archivo)
+                
             if os.path.exists(ruta_archivo):
                 with open(ruta_archivo, 'rb') as f:
                     # En DSpace 7 los archivos se suben al WorkspaceItem como multipart/form-data
