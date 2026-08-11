@@ -8,18 +8,8 @@ __pycache__/
 .venv/
 venv/
 
-# Archivos de datos, imágenes y SAF (No subir a GitHub)
-Fotos/
-fotos/
+# Datos locales de proyectos (fotos, CSVs, resultados)
 Proyectos/
-SimpleArchiveFormat/
-SAF/
-*.csv
-
-# Binarios y JDK pesados
-jdk/
-maven/
-SAFBuilder-master/
 
 # Archivos del sistema u oficina
 Thumbs.db

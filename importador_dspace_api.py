@@ -1,7 +1,6 @@
 import os
+import pandas as pd
 import requests
-import json
-import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
 
 # ==========================================
@@ -17,33 +16,102 @@ COLLECTION_UUID = os.getenv("DSPACE_COLLECTION_UUID")
 # Elegir proyecto dinámicamente desde las carpetas existentes
 base_proyectos = "Proyectos"
 if not os.path.exists(base_proyectos):
-    print(f"❌ ERROR: No existe la carpeta '{base_proyectos}'.")
+    print(f"No existe la carpeta '{base_proyectos}'.")
     exit(1)
 
 carpetas = [d for d in os.listdir(base_proyectos) if os.path.isdir(os.path.join(base_proyectos, d))]
 if not carpetas:
-    print(f"❌ ERROR: No hay ningún proyecto en la carpeta '{base_proyectos}'.")
+    print(f"No hay ningun proyecto en la carpeta '{base_proyectos}'.")
     exit(1)
 
 print("=========================================================")
-print("      SELECCIÓN DE PROYECTO A IMPORTAR                   ")
+print("      SELECCION DE PROYECTO A IMPORTAR                   ")
 print("=========================================================")
 for i, d in enumerate(carpetas, 1):
     print(f"[{i}] {d}")
 
-seleccion = input("\nIngresa el número del proyecto que deseas subir a DSpace:\n> ").strip()
+seleccion = input("\nIngresa el numero del proyecto que deseas subir a DSpace:\n> ").strip()
 try:
     idx = int(seleccion) - 1
     if idx < 0 or idx >= len(carpetas):
         raise ValueError
     NOMBRE_PROYECTO = carpetas[idx]
 except ValueError:
-    print("❌ Selección inválida. Debes ingresar un número de la lista.")
+    print("Seleccion invalida. Debes ingresar un numero de la lista.")
     exit(1)
+
+print(f"\nProyecto seleccionado: {NOMBRE_PROYECTO}\n")
+PROYECTO_DIR = os.path.join("Proyectos", NOMBRE_PROYECTO)
+LOG_FILE = os.path.join(PROYECTO_DIR, "registro_subida.txt")
+
+# ==========================================
+# LECTURA DIRECTA DEL CSV (SIN SAF)
+# ==========================================
+
+def buscar_csv_catalogo(proyecto_dir):
+    """Busca el CSV de catalogo OpenAI en la carpeta del proyecto"""
+    csv_completo = os.path.join(proyecto_dir, "Catalogo_OpenAI_Completo.csv")
+    if os.path.exists(csv_completo):
+        return csv_completo
+    print(f"ERROR: No se encontro {csv_completo}")
+    print("Debes ejecutar catalogador_openai.py primero.")
+    exit(1)
+
+def buscar_foto(nombre_archivo, proyecto_dir):
+    """Busca la foto en la carpeta del proyecto (suelta o en subcarpeta Fotos)"""
+    # Primero buscar suelta en la raiz del proyecto
+    ruta = os.path.join(proyecto_dir, nombre_archivo)
+    if os.path.exists(ruta):
+        return ruta
+    # Luego en subcarpeta Fotos
+    ruta = os.path.join(proyecto_dir, "Fotos", nombre_archivo)
+    if os.path.exists(ruta):
+        return ruta
+    return None
+
+def leer_metadatos_csv(csv_path):
+    """Lee el CSV y devuelve una lista de diccionarios con metadatos y nombre de archivo por fila"""
+    df = pd.read_csv(csv_path, dtype=str)
+    items = []
     
-print(f"\n✅ Proyecto seleccionado: {NOMBRE_PROYECTO}\n")
-SAF_DIR = os.path.join("Proyectos", NOMBRE_PROYECTO, "SimpleArchiveFormat")
-LOG_FILE = os.path.join("Proyectos", NOMBRE_PROYECTO, "registro_subida.txt")
+    # Identificar la columna del nombre de archivo
+    col_archivo = None
+    for posible in ['nombre archivo', 'filename', 'Nombre Archivo']:
+        if posible in df.columns:
+            col_archivo = posible
+            break
+    
+    if not col_archivo:
+        print(f"ERROR: No se encontro columna de nombre de archivo en el CSV.")
+        print(f"Columnas disponibles: {list(df.columns)}")
+        exit(1)
+    
+    # Columnas que son metadatos DSpace (empiezan con dc. o fia. o similares)
+    columnas_metadatos = [c for c in df.columns if '.' in c and c != col_archivo]
+    
+    for _, row in df.iterrows():
+        nombre_archivo = str(row[col_archivo]).strip()
+        if not nombre_archivo or nombre_archivo == 'nan':
+            continue
+            
+        metadatos = {}
+        for col in columnas_metadatos:
+            valor = str(row.get(col, '')).strip()
+            if valor and valor != 'nan':
+                if col not in metadatos:
+                    metadatos[col] = []
+                metadatos[col].append({"value": valor})
+        
+        items.append({
+            "nombre_archivo": nombre_archivo,
+            "metadatos": metadatos
+        })
+    
+    return items
+
+# ==========================================
+# CONEXIÓN A DSPACE
+# ==========================================
 
 def iniciar_sesion():
     print(f"Conectando a {DSPACE_URL}...")
@@ -55,90 +123,45 @@ def iniciar_sesion():
     csrf_token = session.cookies.get("DSPACE-XSRF-COOKIE")
     headers = {"X-XSRF-TOKEN": csrf_token} if csrf_token else {}
     
-    # Iniciar sesión
+    # Iniciar sesion
     resp = session.post(login_url, data={"user": DSPACE_EMAIL, "password": DSPACE_PASSWORD}, headers=headers)
     if resp.status_code == 200:
         token = resp.headers.get("Authorization")
-        # En DSpace 7 el CSRF token cambia tras el login. Lo tomamos de los headers o cookies.
         nuevo_csrf = resp.headers.get("DSPACE-XSRF-TOKEN") or session.cookies.get("DSPACE-XSRF-COOKIE") or csrf_token
         
-        print("✅ Autenticación exitosa.")
+        print("Autenticacion exitosa.\n")
         return session, token, nuevo_csrf
     else:
-        print(f"❌ Error al iniciar sesión: {resp.status_code}")
+        print(f"Error al iniciar sesion: {resp.status_code}")
         exit(1)
 
-def leer_saf_metadata(item_path):
-    """Extrae metadatos de TODOS los archivos .xml del paquete SAF"""
-    metadatos = {}
-    
-    for filename in os.listdir(item_path):
-        if not filename.endswith(".xml"):
-            continue
-            
-        xml_file = os.path.join(item_path, filename)
-        try:
-            tree = ET.parse(xml_file)
-            root = tree.getroot()
-            
-            # Si el archivo tiene schema definido (ej: schema="fia"), lo usamos, si no "dc"
-            schema = root.attrib.get("schema", "dc")
-            
-            for child in root:
-                if child.tag == "dcvalue":
-                    elemento = child.attrib.get("element", "")
-                    calificador = child.attrib.get("qualifier", "none")
-                    valor = child.text
-                    
-                    if valor is None:
-                        continue
-                        
-                    campo = f"{schema}.{elemento}"
-                    if calificador and calificador != "none":
-                        campo += f".{calificador}"
-                    
-                    if campo not in metadatos:
-                        metadatos[campo] = []
-                    metadatos[campo].append({"value": valor})
-        except Exception as e:
-            print(f"  -> Error leyendo XML {filename}: {e}")
-                
-    return metadatos
-
-def obtener_archivos_saf(item_path):
-    """Obtiene los nombres de archivos listados en el 'contents'"""
-    contents_file = os.path.join(item_path, "contents")
-    archivos = []
-    if os.path.exists(contents_file):
-        with open(contents_file, "r", encoding="utf-8") as f:
-            for linea in f:
-                if linea.strip():
-                    archivos.append(linea.strip())
-    return archivos
+# ==========================================
+# FUNCIÓN PRINCIPAL
+# ==========================================
 
 def main():
     print("=========================================================")
-    print("      IMPORTADOR API REST A DSPACE 7 (MODO SEGURO)       ")
-    print(f"      PROYECTO ACTUAL: {NOMBRE_PROYECTO}")
+    print("      IMPORTADOR API REST A DSPACE 7                     ")
+    print(f"      PROYECTO: {NOMBRE_PROYECTO}")
     print("=========================================================")
     
     if not COLLECTION_UUID:
-        print("❌ ERROR: Debes definir 'DSPACE_COLLECTION_UUID' en el archivo .env primero.")
-        print("Este UUID indica a qué colección de la biblioteca irán a parar las fotos.")
+        print("ERROR: Debes definir 'DSPACE_COLLECTION_UUID' en el archivo .env primero.")
         exit(1)
-        
-    if not os.path.exists(SAF_DIR):
-        print(f"❌ ERROR: No se encontró la carpeta {SAF_DIR}.")
-        print("Debes ejecutar el catalogador_openai.py primero para generar los paquetes.")
-        exit(1)
-
-    print("⚠️ ADVERTENCIA: Este script subirá los archivos reales a la biblioteca.")
-    confirmacion = input("¿Estás 100% seguro de que deseas iniciar la carga? (escribe 'SI' para continuar): ")
+    
+    # Leer metadatos directamente del CSV
+    csv_path = buscar_csv_catalogo(PROYECTO_DIR)
+    items = leer_metadatos_csv(csv_path)
+    total = len(items)
+    
+    print(f"Se encontraron {total} items para importar desde el CSV.")
+    print("ADVERTENCIA: Este script subira los archivos reales a la biblioteca.")
+    confirmacion = input("Deseas iniciar la carga? (escribe 'SI' para continuar): ")
     
     if confirmacion.strip().upper() != "SI":
-        print("Operación cancelada por el usuario. No se cargó nada.")
+        print("Operacion cancelada por el usuario.")
         exit(0)
-        
+    
     session, token, csrf_token = iniciar_sesion()
     
     # Headers comunes para API REST
@@ -147,52 +170,45 @@ def main():
         "X-XSRF-TOKEN": csrf_token,
         "Accept": "application/json"
     }
-
-    print("\nIniciando escaneo de la carpeta SAF...")
-    items_procesados = 0
     
-    for nombre_carpeta in sorted(os.listdir(SAF_DIR)):
-        ruta_item = os.path.join(SAF_DIR, nombre_carpeta)
-        if not os.path.isdir(ruta_item) or not nombre_carpeta.startswith("item_"):
-            continue
-            
-        print(f"\nProcesando {nombre_carpeta}...")
-        items_procesados += 1
+    items_ok = 0
+    items_error = 0
+    
+    for i, item in enumerate(items, 1):
+        nombre_archivo = item["nombre_archivo"]
+        metadatos = item["metadatos"]
         
-        # MODO DE PRUEBA REMOVIDO: Se procesarán todas las carpetas
-        metadatos = leer_saf_metadata(ruta_item)
-        archivos = obtener_archivos_saf(ruta_item)
+        print(f"\n[{i}/{total}] Procesando: {nombre_archivo}")
         
         # 1. Crear WorkspaceItem (borrador)
         ws_url = f"{DSPACE_URL}/submission/workspaceitems?owningCollection={COLLECTION_UUID}"
         ws_headers = api_headers.copy()
-        # Enviar un JSON vacío o nulo para cumplir con el formato esperado
         ws_headers["Content-Type"] = "application/json"
         
         resp_ws = session.post(ws_url, headers=ws_headers, json={})
         
         if resp_ws.status_code != 201:
-            print(f"❌ Error al crear borrador en DSpace (Status: {resp_ws.status_code}): {resp_ws.text}")
+            print(f"  -> Error al crear borrador (Status: {resp_ws.status_code})")
+            items_error += 1
             continue
-            
+        
         ws_data = resp_ws.json()
         ws_id = ws_data.get("id")
         
-        # Extraer el UUID del item interno
         try:
             item_uuid = ws_data["_embedded"]["item"]["id"]
-            item_url = ws_data["_embedded"]["item"]["_links"]["self"]["href"]
         except KeyError:
-            print("❌ No se pudo obtener el UUID del item creado.")
+            print("  -> No se pudo obtener el UUID del item creado.")
+            items_error += 1
             continue
-            
-        print(f"  -> Borrador creado exitosamente (Workspace ID: {ws_id}, Item UUID: {item_uuid})")
         
-        # Guardar en bitácora para posible rollback
+        print(f"  -> Borrador creado (WS: {ws_id}, UUID: {item_uuid})")
+        
+        # Guardar en bitacora para posible rollback
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"{item_uuid}\n")
         
-        # 2. Aplicar Metadatos mediante PATCH directo al Item (salta las restricciones del formulario)
+        # 2. Aplicar Metadatos mediante PATCH directo al Item
         patch_ops = []
         for campo, valores in metadatos.items():
             for valor_dict in valores:
@@ -201,7 +217,7 @@ def main():
                     "path": f"/metadata/{campo}",
                     "value": valor_dict
                 })
-            
+        
         if patch_ops:
             patch_headers = api_headers.copy()
             patch_headers["Content-Type"] = "application/json"
@@ -212,108 +228,94 @@ def main():
                 print("  -> Metadatos aplicados correctamente.")
             else:
                 print(f"  -> Error aplicando metadatos: {resp_patch.text}")
+        
+        # 3. Subir Foto (Bitstream)
+        ruta_foto = buscar_foto(nombre_archivo, PROYECTO_DIR)
+        if ruta_foto:
+            with open(ruta_foto, 'rb') as f:
+                bitstream_url = f"{DSPACE_URL}/submission/workspaceitems/{ws_id}"
                 
-        # 3. Subir Archivos (Bitstreams)
-        for archivo in archivos:
-            ruta_archivo = os.path.join(ruta_item, archivo)
-            # Falla de seguridad: si SAFBuilder no copió la foto (porque no existía la carpeta Fotos),
-            # la buscamos directamente en la raíz del proyecto o en su carpeta Fotos.
-            if not os.path.exists(ruta_archivo):
-                ruta_archivo = os.path.join("Proyectos", NOMBRE_PROYECTO, archivo)
-            if not os.path.exists(ruta_archivo):
-                ruta_archivo = os.path.join("Proyectos", NOMBRE_PROYECTO, "Fotos", archivo)
+                file_headers = {
+                    "Authorization": token,
+                    "X-XSRF-TOKEN": csrf_token,
+                    "Accept": "application/json"
+                }
                 
-            if os.path.exists(ruta_archivo):
-                with open(ruta_archivo, 'rb') as f:
-                    # En DSpace 7 los archivos se suben al WorkspaceItem como multipart/form-data
-                    bitstream_url = f"{DSPACE_URL}/submission/workspaceitems/{ws_id}"
-                    
-                    # Preparar los headers quitando Content-Type para que requests arme el multipart boundary solo
-                    file_headers = {
-                        "Authorization": token,
-                        "X-XSRF-TOKEN": csrf_token,
-                        "Accept": "application/json"
-                    }
-                    
-                    files = {"file": (archivo, f, "image/jpeg")}
-                    
-                    resp_file = session.post(bitstream_url, headers=file_headers, files=files)
-                    
-                    if resp_file.status_code in [200, 201]:
-                        print(f"  -> Archivo subido: {archivo}")
-                    else:
-                        print(f"  -> Error subiendo {archivo} (Status: {resp_file.status_code}): {resp_file.text}")
-
-        # 4. Aceptar licencia y auto-publicar
-        # a) Aceptar licencia
+                files = {"file": (nombre_archivo, f, "image/jpeg")}
+                resp_file = session.post(bitstream_url, headers=file_headers, files=files)
+                
+                if resp_file.status_code in [200, 201]:
+                    print(f"  -> Foto subida: {nombre_archivo}")
+                else:
+                    print(f"  -> Error subiendo foto (Status: {resp_file.status_code})")
+        else:
+            print(f"  -> ADVERTENCIA: No se encontro la foto {nombre_archivo} en disco.")
+        
+        # 4. Aceptar licencia
         license_patch = [{"op": "add", "path": "/sections/license/granted", "value": "true"}]
+        patch_headers = api_headers.copy()
+        patch_headers["Content-Type"] = "application/json"
         session.patch(f"{DSPACE_URL}/submission/workspaceitems/{ws_id}", headers=patch_headers, json=license_patch)
         
-        # b) Enviar al workflow (DESACTIVADO: Queda como borrador para revisión manual)
-        # wf_url = f"{DSPACE_URL}/workflow/workflowitems"
-        # wf_headers = api_headers.copy()
-        # wf_headers["Content-Type"] = "text/uri-list"
-        # ws_uri = f"{DSPACE_URL}/submission/workspaceitems/{ws_id}"
-        # 
-        # resp_wf = session.post(wf_url, headers=wf_headers, data=ws_uri)
-        # if resp_wf.status_code in [200, 201, 204]:
-        #     print("  -> ✅ Ítem publicado exitosamente en la colección.")
-        # else:
-            # print(f"  -> ⚠️ Advertencia: No se pudo auto-publicar el ítem (Status {resp_wf.status_code}): {resp_wf.text}")
-            
-    print(f"\n✅ Proceso completado. Se intentó cargar {items_procesados} ítems.")
+        items_ok += 1
+    
+    print(f"\n=========================================================")
+    print(f"  RESULTADO: {items_ok} exitosos, {items_error} con error")
+    print(f"=========================================================")
     
     # ---------------------------------------------------------
     # LIMPIEZA FINAL DE ARCHIVOS PESADOS
     # ---------------------------------------------------------
-    print("\n=========================================================")
-    print("      LIMPIEZA DE ESPACIO LOCAL                          ")
-    print("=========================================================")
-    print("Los borradores ya están seguros en la nube de DSpace.")
-    limpiar = input("¿Deseas borrar las fotos locales y el paquete SAF para liberar espacio? (Se conservarán los CSV) [S/N]: ").strip().upper()
-    
-    if limpiar == 'S':
-        import shutil
-        carpeta_proyecto = os.path.join("Proyectos", NOMBRE_PROYECTO)
+    if items_ok > 0:
+        print("\n=========================================================")
+        print("      LIMPIEZA DE ESPACIO LOCAL                          ")
+        print("=========================================================")
+        print("Los borradores ya estan seguros en la nube de DSpace.")
+        limpiar = input("Deseas borrar las fotos locales para liberar espacio? (Solo se conservara el CSV) [S/N]: ").strip().upper()
         
-        carpeta_fotos = os.path.join(carpeta_proyecto, "Fotos")
-        if os.path.exists(carpeta_fotos):
+        if limpiar == 'S':
+            import shutil
+            
+            # Borrar carpeta Fotos si existe
+            carpeta_fotos = os.path.join(PROYECTO_DIR, "Fotos")
+            if os.path.exists(carpeta_fotos):
+                try:
+                    shutil.rmtree(carpeta_fotos)
+                    print(f"  Carpeta '{carpeta_fotos}' eliminada.")
+                except Exception as e:
+                    print(f"  Error al borrar Fotos: {e}")
+            else:
+                # Borrar fotos sueltas
+                exts_imagen = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.tiff')
+                try:
+                    for arch in os.listdir(PROYECTO_DIR):
+                        if arch.lower().endswith(exts_imagen):
+                            os.remove(os.path.join(PROYECTO_DIR, arch))
+                    print(f"  Imagenes sueltas eliminadas de '{PROYECTO_DIR}'.")
+                except Exception as e:
+                    print(f"  Error al borrar imagenes: {e}")
+            
+            # Borrar carpeta SAF residual si existe (de ejecuciones anteriores)
+            saf_dir = os.path.join(PROYECTO_DIR, "SimpleArchiveFormat")
+            if os.path.exists(saf_dir):
+                try:
+                    shutil.rmtree(saf_dir)
+                    print(f"  Carpeta SAF residual eliminada.")
+                except Exception as e:
+                    print(f"  Error al borrar SAF: {e}")
+            
+            # Borrar todos los CSV excepto Catalogo_OpenAI_Completo.csv
             try:
-                shutil.rmtree(carpeta_fotos)
-                print(f"🗑️  Carpeta '{carpeta_fotos}' eliminada.")
+                for arch in os.listdir(PROYECTO_DIR):
+                    if arch.lower().endswith('.csv') and arch != "Catalogo_OpenAI_Completo.csv":
+                        os.remove(os.path.join(PROYECTO_DIR, arch))
+                        print(f"  Archivo temporal '{arch}' eliminado.")
             except Exception as e:
-                print(f"❌ Error al borrar Fotos: {e}")
+                print(f"  Error al borrar CSVs temporales: {e}")
+            
+            print("Limpieza terminada. Solo quedo Catalogo_OpenAI_Completo.csv")
         else:
-            # Si no existe la carpeta "Fotos", significa que las fotos están sueltas en la raíz del proyecto.
-            # Borramos todos los archivos de imagen directamente.
-            exts_imagen = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.tiff')
-            try:
-                for arch in os.listdir(carpeta_proyecto):
-                    if arch.lower().endswith(exts_imagen):
-                        os.remove(os.path.join(carpeta_proyecto, arch))
-                print(f"🗑️  Imágenes sueltas eliminadas de '{carpeta_proyecto}'.")
-            except Exception as e:
-                print(f"❌ Error al borrar imágenes sueltas: {e}")
-        if os.path.exists(SAF_DIR):
-            try:
-                shutil.rmtree(SAF_DIR)
-                print(f"🗑️  Carpeta '{SAF_DIR}' eliminada.")
-            except Exception as e:
-                print(f"❌ Error al borrar SAF: {e}")
-                
-        # Borrar todos los CSV excepto Catalogo_OpenAI_Completo.csv
-        try:
-            for arch in os.listdir(carpeta_proyecto):
-                if arch.lower().endswith('.csv') and arch != "Catalogo_OpenAI_Completo.csv":
-                    ruta_arch = os.path.join(carpeta_proyecto, arch)
-                    os.remove(ruta_arch)
-                    print(f"🗑️  Archivo temporal '{arch}' eliminado.")
-        except Exception as e:
-            print(f"❌ Error al borrar CSVs temporales: {e}")
-                
-        print("✅ Limpieza terminada. ¡Solo quedó el archivo Catalogo_OpenAI_Completo.csv!")
-    else:
-        print("Conservando los archivos locales intactos.")
+            print("Conservando los archivos locales intactos.")
 
 if __name__ == "__main__":
     main()
