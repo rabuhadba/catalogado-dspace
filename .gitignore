@@ -1,18 +1,41 @@
 # Secretos y variables de entorno
 .env
+*.env.local
 
 # Entornos virtuales y temporales de Python
 __pycache__/
-*.pyc
-*.pyo
-.venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
 venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
 
-# Datos locales de proyectos (fotos, CSVs, resultados)
+# PyInstaller / Compilación
+build/
+dist/
+*.manifest
+*.spec.bak
+
+# Carpetas de datos locales y pruebas
 Proyectos/
+Proyectos_Prueba/
+workspace_local/
 
-# Archivos del sistema u oficina
+# Versiones anteriores preservadas en GitHub (rama legacy / tag v1.0-anterior)
+CATALOGADO DSPACE/
+CATALOGADO DSPACE SAF/
+
+# Archivos del sistema y temporales
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 .DS_Store
+*.log
 *.lock
 .~lock.*
