@@ -30,6 +30,11 @@ from core.catalogador import (
 from core.importador import ImportadorDSpace
 from core.saf_builder import SAFBuilder
 from core.relacionador import RelacionadorDSpace
+from core.cargador_siges import (
+    CargadorSiges,
+    DEFAULT_SIGES_COLLECTION_UUID,
+    MULTIVALUE_FIELDS,
+)
 
 # ══════════════════════════════════════════════════════════════
 # Constantes de diseño
@@ -2656,6 +2661,702 @@ class RelacionesFrame(ctk.CTkScrollableFrame):
 
 
 # ══════════════════════════════════════════════════════════════
+# Frame: Carga SIGES
+# ══════════════════════════════════════════════════════════════
+
+class CargaSigesFrame(ctk.CTkScrollableFrame):
+    """Sección de ingestión de iniciativas SIGES a DSpace 7."""
+
+    def __init__(self, parent, log_fn, get_config, **kwargs):
+        super().__init__(parent, fg_color="transparent", **kwargs)
+        self.log_fn = log_fn
+        self.get_config = get_config
+        self.cargador = None
+        self._items = []
+        self._idx_preview = 0
+        self._csv_path = None
+        self._running = False
+
+        self._crear_ui()
+        self.actualizar_estado()
+
+    def _crear_ui(self):
+        # ── Encabezado principal ──
+        ctk.CTkLabel(
+            self, text="📋  Carga SIGES — Ingestión de Iniciativas",
+            font=(FONT_FAMILY, 22, "bold"),
+        ).pack(anchor="w", padx=20, pady=(20, 5))
+        ctk.CTkLabel(
+            self, text="Carga el archivo CSV de iniciativas para validar y subir directamente a la colección privada SIGES.",
+            font=(FONT_FAMILY, 13), text_color="#888",
+        ).pack(anchor="w", padx=20, pady=(0, 15))
+
+        # ── Tarjeta 1: Carga y Validación de CSV ──
+        card1 = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=10)
+        card1.pack(fill="x", padx=20, pady=(0, 15))
+
+        ctk.CTkLabel(
+            card1, text="📁  Carga y Validación de CSV",
+            font=(FONT_FAMILY, 14, "bold"),
+        ).pack(anchor="w", padx=15, pady=(12, 8))
+
+        # Fila de selección de archivo
+        row_file = ctk.CTkFrame(card1, fg_color="transparent")
+        row_file.pack(fill="x", padx=15, pady=(0, 8))
+
+        self.btn_csv = ctk.CTkButton(
+            row_file, text="📂  Seleccionar CSV SIGES", width=200, height=36,
+            font=(FONT_FAMILY, 12, "bold"), fg_color="#333", hover_color="#444",
+            command=self._seleccionar_csv,
+        )
+        self.btn_csv.pack(side="left", padx=(0, 12))
+
+        self.lbl_csv_nombre = ctk.CTkLabel(
+            row_file, text="(Ningún archivo seleccionado)",
+            font=(FONT_FAMILY, 12), text_color="#aaa",
+        )
+        self.lbl_csv_nombre.pack(side="left")
+
+        # Label colección destino
+        self.lbl_col_info = ctk.CTkLabel(
+            card1, text=f"Colección Destino: SIGES ({DEFAULT_SIGES_COLLECTION_UUID})",
+            font=(FONT_FAMILY, 11, "bold"), text_color=ACCENT,
+        )
+        self.lbl_col_info.pack(anchor="w", padx=15, pady=(0, 10))
+
+        # Fila de estadísticas / integridad
+        row_stats = ctk.CTkFrame(card1, fg_color="transparent")
+        row_stats.pack(fill="x", padx=15, pady=(0, 8))
+
+        self.badge_total = ctk.CTkLabel(
+            row_stats, text="📊 Total: 0", font=(FONT_FAMILY, 12, "bold"),
+            text_color="#eee", fg_color="#18182a", corner_radius=6, padx=14, pady=6,
+        )
+        self.badge_total.pack(side="left", padx=(0, 10))
+
+        self.badge_validas = ctk.CTkLabel(
+            row_stats, text="✅ Válidas: 0", font=(FONT_FAMILY, 12, "bold"),
+            text_color="#2ecc71", fg_color="#18182a", corner_radius=6, padx=14, pady=6,
+        )
+        self.badge_validas.pack(side="left", padx=(0, 10))
+
+        self.badge_advertencias = ctk.CTkLabel(
+            row_stats, text="⚠️ Con advertencias: 0", font=(FONT_FAMILY, 12, "bold"),
+            text_color="#f39c12", fg_color="#18182a", corner_radius=6, padx=14, pady=6,
+        )
+        self.badge_advertencias.pack(side="left")
+
+        # Nota de integridad
+        ctk.CTkLabel(
+            card1,
+            text="ℹ️  Los registros válidos cuentan con código 'fia.iniciativa' y 'dc.title'. Registros con advertencias carecen de alguno de estos campos obligatorios.",
+            font=(FONT_FAMILY, 11), text_color="#aa8800", wraplength=800, justify="left",
+        ).pack(anchor="w", padx=15, pady=(0, 12))
+
+        # ── Tarjeta 2: Ficha / Vista Previa de Iniciativa ──
+        card2 = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=10)
+        card2.pack(fill="x", padx=20, pady=(0, 15))
+
+        # Cabecera de vista previa con controles de navegación
+        row_prev_hdr = ctk.CTkFrame(card2, fg_color="transparent")
+        row_prev_hdr.pack(fill="x", padx=15, pady=(12, 10))
+
+        ctk.CTkLabel(
+            row_prev_hdr, text="👁️  Ficha y Vista Previa de la Iniciativa",
+            font=(FONT_FAMILY, 14, "bold"), text_color=ACCENT,
+        ).pack(side="left")
+
+        # Controles a la derecha: Quick jump + ◀ [X de N] ▶
+        self.btn_next = ctk.CTkButton(
+            row_prev_hdr, text="▶", width=34, height=30,
+            font=(FONT_FAMILY, 12, "bold"), fg_color="#333", hover_color="#444",
+            command=self._next_item, state="disabled",
+        )
+        self.btn_next.pack(side="right", padx=(4, 0))
+
+        self.lbl_pos = ctk.CTkLabel(
+            row_prev_hdr, text="[ 0 de 0 ]",
+            font=(FONT_FAMILY, 12, "bold"), text_color="#ddd",
+        )
+        self.lbl_pos.pack(side="right", padx=6)
+
+        self.btn_prev = ctk.CTkButton(
+            row_prev_hdr, text="◀", width=34, height=30,
+            font=(FONT_FAMILY, 12, "bold"), fg_color="#333", hover_color="#444",
+            command=self._prev_item, state="disabled",
+        )
+        self.btn_prev.pack(side="right", padx=(6, 4))
+
+        self.combo_jump = ctk.CTkOptionMenu(
+            row_prev_hdr, values=["(Sin iniciativas)"], width=280, height=30,
+            font=(FONT_FAMILY, 11), fg_color="#222233", button_color="#333344",
+            dropdown_fg_color="#1a1a2e", command=self._on_jump_select,
+        )
+        self.combo_jump.pack(side="right", padx=(0, 8))
+
+        # Contenedor del contenido (dark card #161626)
+        self.prev_body = ctk.CTkFrame(card2, fg_color="#161626", corner_radius=8)
+        self.prev_body.pack(fill="x", padx=15, pady=(0, 15))
+
+        self._mostrar_preview_vacio()
+
+        # ── Tarjeta 3: Acciones de Subida ──
+        card3 = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=10)
+        card3.pack(fill="x", padx=20, pady=(0, 20))
+
+        ctk.CTkLabel(
+            card3, text="🚀  Acciones de Subida a DSpace",
+            font=(FONT_FAMILY, 14, "bold"),
+        ).pack(anchor="w", padx=15, pady=(12, 8))
+
+        # Barra de progreso y estado
+        self.lbl_progreso = ctk.CTkLabel(
+            card3, text="Esperando inicio...",
+            font=(FONT_FAMILY, 12), text_color="#aaa",
+        )
+        self.lbl_progreso.pack(anchor="w", padx=15, pady=(0, 4))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            card3, height=14, corner_radius=7,
+            fg_color="#1e1e30", progress_color=ACCENT,
+        )
+        self.progress_bar.pack(fill="x", padx=15, pady=(0, 4))
+        self.progress_bar.set(0)
+
+        self.lbl_pct = ctk.CTkLabel(
+            card3, text="0%", font=(FONT_FAMILY, 11), text_color="#666",
+        )
+        self.lbl_pct.pack(anchor="e", padx=15, pady=(0, 8))
+
+        # Fila de botones de acción
+        row_actions = ctk.CTkFrame(card3, fg_color="transparent")
+        row_actions.pack(fill="x", padx=15, pady=(0, 15))
+
+        self.btn_prueba = ctk.CTkButton(
+            row_actions, text="🧪  Cargar solo este proyecto (Prueba)", height=42,
+            font=(FONT_FAMILY, 13, "bold"), fg_color="#254b77", hover_color="#315f97",
+            text_color="#fff", command=self._cargar_prueba, state="disabled",
+        )
+        self.btn_prueba.pack(side="left", padx=(0, 10))
+
+        self.btn_masiva = ctk.CTkButton(
+            row_actions, text="🚀  Iniciar Carga Masiva", height=42,
+            font=(FONT_FAMILY, 14, "bold"), fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            text_color="#111", command=self._iniciar_carga_masiva, state="disabled",
+        )
+        self.btn_masiva.pack(side="left", padx=(0, 10))
+
+        self.btn_detener = ctk.CTkButton(
+            row_actions, text="⏹  Detener", height=42, width=110,
+            font=(FONT_FAMILY, 13, "bold"), fg_color="#8b0000", hover_color="#a00000",
+            text_color="#fff", command=self._detener, state="disabled",
+        )
+        self.btn_detener.pack(side="left")
+
+    def _mostrar_preview_vacio(self):
+        for w in self.prev_body.winfo_children():
+            w.destroy()
+        lbl = ctk.CTkLabel(
+            self.prev_body,
+            text="📂  Selecciona un archivo CSV de iniciativas para ver su ficha y vista previa aquí.",
+            font=(FONT_FAMILY, 12), text_color="#666",
+        )
+        lbl.pack(pady=35)
+
+    def actualizar_estado(self):
+        """Actualiza el UUID de la colección SIGES desde la configuración."""
+        config = self.get_config()
+        uuid = (config.get("DSPACE_SIGES_COLLECTION_UUID", "") or DEFAULT_SIGES_COLLECTION_UUID).strip()
+        self.lbl_col_info.configure(text=f"Colección Destino: SIGES ({uuid})")
+
+    # ------------------------------------------------------------------
+    # Carga de CSV
+    # ------------------------------------------------------------------
+
+    def _seleccionar_csv(self):
+        ruta = filedialog.askopenfilename(
+            title="Seleccionar archivo CSV SIGES",
+            filetypes=[("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")],
+        )
+        if not ruta:
+            return
+
+        self._csv_path = ruta
+        self.lbl_csv_nombre.configure(text=os.path.basename(ruta))
+        self.log_fn(f"Cargando iniciativas desde: {ruta}")
+
+        try:
+            cargador = CargadorSiges(
+                dspace_url="",
+                log=self._log_safe,
+                progress=self._progress_safe,
+            )
+            items, stats = cargador.leer_csv(ruta)
+            self._items = items
+            self._idx_preview = 0
+
+            # Actualizar tarjetas de estadística
+            self.badge_total.configure(text=f"📊 Total: {stats['total']}")
+            self.badge_validas.configure(text=f"✅ Válidas: {stats['validos']}")
+            self.badge_advertencias.configure(text=f"⚠️ Con advertencias: {stats['advertencias']}")
+
+            # Actualizar dropdown de navegación rápida
+            if items:
+                opciones = [
+                    f"{i + 1}. [{it.get('fia.iniciativa', 'S/C')}] {it.get('dc.title', 'Sin título')[:40]}"
+                    for i, it in enumerate(items)
+                ]
+                self.combo_jump.configure(values=opciones)
+                self.combo_jump.set(opciones[0])
+                self.btn_prueba.configure(state="normal")
+                self.btn_masiva.configure(state="normal")
+                self._mostrar_item(0)
+            else:
+                self.combo_jump.configure(values=["(Sin iniciativas)"])
+                self.combo_jump.set("(Sin iniciativas)")
+                self.btn_prueba.configure(state="disabled")
+                self.btn_masiva.configure(state="disabled")
+                self._mostrar_preview_vacio()
+
+            self.log_fn(
+                f"✅ CSV cargado: {stats['total']} iniciativas "
+                f"({stats['validos']} válidas, {stats['advertencias']} con advertencias)"
+            )
+
+        except Exception as e:
+            self.log_fn(f"❌ Error al leer CSV: {e}")
+            messagebox.showerror("Error al leer CSV", f"No se pudo cargar el archivo CSV:\n{e}")
+
+    # ------------------------------------------------------------------
+    # Navegación y renderizado de Ficha / Vista Previa
+    # ------------------------------------------------------------------
+
+    def _on_jump_select(self, choice):
+        if not self._items or choice.startswith("("):
+            return
+        try:
+            idx = int(choice.split(".")[0].strip()) - 1
+            if 0 <= idx < len(self._items):
+                self._mostrar_item(idx)
+        except Exception:
+            pass
+
+    def _prev_item(self):
+        if self._idx_preview > 0:
+            self._mostrar_item(self._idx_preview - 1)
+
+    def _next_item(self):
+        if self._idx_preview < len(self._items) - 1:
+            self._mostrar_item(self._idx_preview + 1)
+
+    def _mostrar_item(self, idx):
+        if not self._items or idx < 0 or idx >= len(self._items):
+            return
+        self._idx_preview = idx
+        item = self._items[idx]
+
+        # Posición y botones
+        tot = len(self._items)
+        self.lbl_pos.configure(text=f"[ {idx + 1} de {tot} ]")
+        self.btn_prev.configure(state="normal" if idx > 0 else "disabled")
+        self.btn_next.configure(state="normal" if idx < tot - 1 else "disabled")
+
+        vals = self.combo_jump.cget("values")
+        if idx < len(vals):
+            self.combo_jump.set(vals[idx])
+
+        self._construir_ficha(item)
+
+    def _construir_ficha(self, item):
+        for w in self.prev_body.winfo_children():
+            w.destroy()
+
+        # ── Badge principal de la iniciativa ──
+        row_top = ctk.CTkFrame(self.prev_body, fg_color="transparent")
+        row_top.pack(fill="x", padx=12, pady=(12, 10))
+
+        inic = item.get("fia.iniciativa", "").strip() or "Sin Código"
+        lbl_inic = ctk.CTkLabel(
+            row_top, text=f" Iniciativa: {inic} ",
+            font=(FONT_FAMILY, 14, "bold"), text_color="#111",
+            fg_color=ACCENT, corner_radius=6, height=28,
+        )
+        lbl_inic.pack(side="left", padx=(0, 8))
+
+        estado = item.get("fia.estado", "").strip() or "-"
+        lbl_est = ctk.CTkLabel(
+            row_top, text=f" Estado: {estado} ",
+            font=(FONT_FAMILY, 11, "bold"), text_color="#ddd",
+            fg_color="#202034", corner_radius=6, height=28,
+        )
+        lbl_est.pack(side="left", padx=(0, 8))
+
+        anio = item.get("dc.date.issued", "").strip() or "-"
+        lbl_yr = ctk.CTkLabel(
+            row_top, text=f" Año: {anio} ",
+            font=(FONT_FAMILY, 11, "bold"), text_color="#ddd",
+            fg_color="#202034", corner_radius=6, height=28,
+        )
+        lbl_yr.pack(side="left", padx=(0, 8))
+
+        es_valido = item.get("_es_valido", True)
+        val_txt = "✅ Válida" if es_valido else "⚠️ Faltan campos obligatorios"
+        val_col = "#2ecc71" if es_valido else "#f39c12"
+        lbl_val = ctk.CTkLabel(
+            row_top, text=f" {val_txt} ",
+            font=(FONT_FAMILY, 11, "bold"), text_color=val_col,
+            fg_color="#202034", corner_radius=6, height=28,
+        )
+        lbl_val.pack(side="right")
+
+        # ── 1. Información General ──
+        sec1 = ctk.CTkFrame(self.prev_body, fg_color="#10101e", corner_radius=6)
+        sec1.pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(
+            sec1, text="📌  Información General",
+            font=(FONT_FAMILY, 12, "bold"), text_color=ACCENT,
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+        title = item.get("dc.title", "").strip() or "(Sin título)"
+        ctk.CTkLabel(
+            sec1, text=title, font=(FONT_FAMILY, 12, "bold"), text_color="#ffffff",
+            wraplength=760, justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        self._crear_campo_kv(sec1, "Convocatoria:", item.get("fia.convocatoria", ""))
+        self._crear_campo_kv(sec1, "Supervisor:", item.get("fia.supervisor", ""))
+        self._crear_campo_kv(sec1, "Ejecutor:", item.get("fia.ejecutor", ""))
+
+        f_ini = item.get("fia.proyecto.inicio", "").strip()
+        f_fin = item.get("fia.proyecto.fin", "").strip()
+        fechas = f"{f_ini}  al  {f_fin}" if (f_ini or f_fin) else "-"
+        self._crear_campo_kv(sec1, "Fechas de Ejecución:", fechas)
+
+        reg = item.get("fia.region", "").strip()
+        part = item.get("fia.participacion", "").strip()
+        reg_txt = reg or "-"
+        if part and part != reg:
+            reg_txt += f"  |  Participación: {part}"
+        self._crear_campo_kv(sec1, "Regiones:", reg_txt)
+
+        # ── 2. Objetivos y Resumen ──
+        sec2 = ctk.CTkFrame(self.prev_body, fg_color="#10101e", corner_radius=6)
+        sec2.pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(
+            sec2, text="🎯  Objetivos y Resumen",
+            font=(FONT_FAMILY, 12, "bold"), text_color=ACCENT,
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+        # Resumen / Abstract
+        abstract = item.get("dc.description.abstract", "").strip()
+        ctk.CTkLabel(
+            sec2, text="Resumen (dc.description.abstract):",
+            font=(FONT_FAMILY, 11, "bold"), text_color="#aaa",
+        ).pack(anchor="w", padx=12, pady=(2, 2))
+
+        txt_abs = ctk.CTkTextbox(
+            sec2, height=85, font=(FONT_FAMILY, 11),
+            fg_color="#0b0b14", text_color="#ddd", wrap="word",
+        )
+        txt_abs.pack(fill="x", padx=12, pady=(0, 6))
+        txt_abs.insert("1.0", abstract if abstract else "(Sin resumen disponible)")
+        txt_abs.configure(state="disabled")
+
+        # Objetivo General
+        obj_gen = item.get("fia.objetivo-general", "").strip()
+        if obj_gen:
+            ctk.CTkLabel(
+                sec2, text="Objetivo General (fia.objetivo-general):",
+                font=(FONT_FAMILY, 11, "bold"), text_color="#aaa",
+            ).pack(anchor="w", padx=12, pady=(2, 2))
+
+            txt_og = ctk.CTkTextbox(
+                sec2, height=50, font=(FONT_FAMILY, 11),
+                fg_color="#0b0b14", text_color="#ddd", wrap="word",
+            )
+            txt_og.pack(fill="x", padx=12, pady=(0, 6))
+            txt_og.insert("1.0", obj_gen)
+            txt_og.configure(state="disabled")
+
+        # Objetivo Específico
+        obj_esp = item.get("fia.objetivo-especifico", "").strip()
+        if obj_esp:
+            ctk.CTkLabel(
+                sec2, text="Objetivo Específico (fia.objetivo-especifico):",
+                font=(FONT_FAMILY, 11, "bold"), text_color="#aaa",
+            ).pack(anchor="w", padx=12, pady=(2, 2))
+
+            txt_oe = ctk.CTkTextbox(
+                sec2, height=50, font=(FONT_FAMILY, 11),
+                fg_color="#0b0b14", text_color="#ddd", wrap="word",
+            )
+            txt_oe.pack(fill="x", padx=12, pady=(0, 8))
+            txt_oe.insert("1.0", obj_esp)
+            txt_oe.configure(state="disabled")
+
+        # ── 3. Equipo y Participantes ──
+        sec3 = ctk.CTkFrame(self.prev_body, fg_color="#10101e", corner_radius=6)
+        sec3.pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(
+            sec3, text="👥  Equipo y Participantes",
+            font=(FONT_FAMILY, 12, "bold"), text_color=ACCENT,
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+        coord_p = item.get("fia.coordinador-principal", "").strip() or item.get("fia.coordinador", "").strip()
+        coord_a = item.get("fia.coordinador-alterno", "").strip()
+        self._crear_campo_kv(sec3, "Coordinador Principal:", coord_p)
+        self._crear_campo_kv(sec3, "Coordinador Alterno:", coord_a)
+
+        self._crear_pills_multivalor(
+            sec3, "Equipo Técnico (fia.equipo-tecnico):",
+            item.get("fia.equipo-tecnico", ""),
+            pill_color="#1a2d42", text_color="#70b5f9",
+        )
+        self._crear_pills_multivalor(
+            sec3, "Consultores (fia.consultor):",
+            item.get("fia.consultor", ""),
+            pill_color="#361f38", text_color="#e086f4",
+        )
+        benef = item.get("fia.beneficiario-directo", "").strip() or item.get("fia.participante-individual", "").strip()
+        self._crear_pills_multivalor(
+            sec3, "Beneficiarios / Participantes:",
+            benef,
+            pill_color="#1b3826", text_color="#7ae6a3",
+        )
+
+        # ── 4. Clasificación Agropecuaria ──
+        sec4 = ctk.CTkFrame(self.prev_body, fg_color="#10101e", corner_radius=6)
+        sec4.pack(fill="x", padx=12, pady=(0, 12))
+
+        ctk.CTkLabel(
+            sec4, text="🌾  Clasificación Agropecuaria",
+            font=(FONT_FAMILY, 12, "bold"), text_color=ACCENT,
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+        self._crear_campo_kv(sec4, "Sector:", item.get("fia.sector", ""))
+        self._crear_campo_kv(sec4, "Subsector:", item.get("fia.subsector", ""))
+        self._crear_campo_kv(sec4, "Rubro:", item.get("fia.rubro", ""))
+        self._crear_campo_kv(sec4, "Especie:", item.get("fia.especie", ""))
+
+        self._crear_pills_multivalor(
+            sec4, "Temas (fia.tema):",
+            item.get("fia.tema", ""),
+            pill_color="#123d37", text_color=ACCENT,
+        )
+
+    def _crear_campo_kv(self, parent, label_text, val_text):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=2)
+        ctk.CTkLabel(
+            row, text=label_text, font=(FONT_FAMILY, 11, "bold"),
+            text_color="#888", width=160, anchor="w",
+        ).pack(side="left")
+        val_str = str(val_text).strip() if val_text else "-"
+        ctk.CTkLabel(
+            row, text=val_str, font=(FONT_FAMILY, 11),
+            text_color="#ccc", anchor="w", wraplength=600, justify="left",
+        ).pack(side="left", fill="x", expand=True)
+
+    def _crear_pills_multivalor(self, parent, title, raw_str, pill_color="#22223a", text_color="#a8d8ea"):
+        ctk.CTkLabel(
+            parent, text=title, font=(FONT_FAMILY, 11, "bold"),
+            text_color="#aaa",
+        ).pack(anchor="w", padx=12, pady=(6, 2))
+
+        val_limpio = (raw_str or "").replace("| |", "||")
+        items = [v.strip() for v in val_limpio.split("||") if v.strip()]
+
+        container = ctk.CTkFrame(parent, fg_color="transparent")
+        container.pack(fill="x", padx=12, pady=(0, 6))
+
+        if not items:
+            ctk.CTkLabel(container, text="-", font=(FONT_FAMILY, 11), text_color="#555").pack(anchor="w")
+            return
+
+        current_row = ctk.CTkFrame(container, fg_color="transparent")
+        current_row.pack(fill="x", pady=1)
+        current_len = 0
+
+        for val in items:
+            if current_len + len(val) > 75 and current_len > 0:
+                current_row = ctk.CTkFrame(container, fg_color="transparent")
+                current_row.pack(fill="x", pady=1)
+                current_len = 0
+            pill = ctk.CTkLabel(
+                current_row, text=f" {val} ", font=(FONT_FAMILY, 10, "bold"),
+                fg_color=pill_color, text_color=text_color, corner_radius=10, height=22,
+            )
+            pill.pack(side="left", padx=(0, 5), pady=2)
+            current_len += len(val) + 6
+
+    # ------------------------------------------------------------------
+    # Acciones de Subida: Prueba y Masiva
+    # ------------------------------------------------------------------
+
+    def _preparar_cargador(self):
+        config = self.get_config()
+        url = config.get("DSPACE_URL", "").strip()
+        email = config.get("DSPACE_EMAIL", "").strip()
+        pwd = config.get("DSPACE_PASSWORD", "").strip()
+        uuid = (config.get("DSPACE_SIGES_COLLECTION_UUID", "") or DEFAULT_SIGES_COLLECTION_UUID).strip()
+
+        if not url or not email or not pwd:
+            messagebox.showwarning(
+                "Configuración Incompleta",
+                "Por favor configura la URL, Email y Contraseña de DSpace en la sección de Ajustes.",
+            )
+            return None, None
+
+        cargador = CargadorSiges(
+            dspace_url=url,
+            email=email,
+            password=pwd,
+            collection_uuid=uuid,
+            log=self._log_safe,
+            progress=self._progress_safe,
+        )
+        self.cargador = cargador
+        return cargador, uuid
+
+    def _cargar_prueba(self):
+        if not self._items or self._idx_preview >= len(self._items):
+            return
+
+        cargador, col_uuid = self._preparar_cargador()
+        if not cargador:
+            return
+
+        item = self._items[self._idx_preview]
+        inic = item.get("fia.iniciativa", f"Fila {item.get('_fila', self._idx_preview + 1)}")
+
+        self.btn_prueba.configure(state="disabled", text="🧪  Cargando...")
+        self.btn_masiva.configure(state="disabled")
+        self.log_fn(f"Iniciando subida de prueba para iniciativa: {inic}...")
+
+        def _run():
+            try:
+                ok, handle_str, msg = cargador.cargar_un_item(item, collection_uuid=col_uuid)
+
+                def _finish():
+                    self.btn_prueba.configure(state="normal", text="🧪  Cargar solo este proyecto (Prueba)")
+                    self.btn_masiva.configure(state="normal")
+                    if ok:
+                        self.log_fn(f"✅ Iniciativa {inic} publicada con éxito -> {handle_str}")
+                        messagebox.showinfo("Prueba Exitosa", f"Iniciativa {inic} publicada con éxito.\n\nHandle: {handle_str}")
+                    else:
+                        self.log_fn(f"❌ Error al cargar {inic}: {msg}")
+                        messagebox.showerror("Error en Prueba", f"Error al cargar iniciativa {inic}:\n\n{msg}")
+
+                self.after(0, _finish)
+            except Exception as e:
+                def _err():
+                    self.btn_prueba.configure(state="normal", text="🧪  Cargar solo este proyecto (Prueba)")
+                    self.btn_masiva.configure(state="normal")
+                    self.log_fn(f"❌ Excepción durante la subida de prueba: {e}")
+                    messagebox.showerror("Excepción en Prueba", f"Ocurrió un error inesperado:\n\n{e}")
+
+                self.after(0, _err)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _iniciar_carga_masiva(self):
+        if not self._items:
+            return
+
+        cargador, col_uuid = self._preparar_cargador()
+        if not cargador:
+            return
+
+        n = len(self._items)
+        confirm = messagebox.askyesno(
+            "Confirmar Carga",
+            f"¿Deseas iniciar la carga masiva de {n} iniciativas a DSpace SIGES?\n\n"
+            f"Colección destino: {col_uuid}",
+        )
+        if not confirm:
+            return
+
+        self._running = True
+        self._deshabilitar_controles()
+        self.progress_bar.set(0)
+        self.lbl_pct.configure(text="0%")
+        self.lbl_progreso.configure(text=f"[0 / {n}] procesados (0%)")
+
+        output_dir = os.path.dirname(self._csv_path) if self._csv_path else os.getcwd()
+
+        def _run():
+            try:
+                exitosos, errores, log_path = cargador.cargar_lote(
+                    self._items,
+                    collection_uuid=col_uuid,
+                    output_dir=output_dir,
+                )
+
+                def _finish():
+                    self._running = False
+                    self._habilitar_controles()
+                    resumen = (
+                        f"Carga masiva finalizada.\n\n"
+                        f"✅ Exitosos: {exitosos}\n"
+                        f"❌ Errores: {errores}\n\n"
+                        f"Bitácora guardada en:\n{log_path}"
+                    )
+                    messagebox.showinfo("Carga Masiva Finalizada", resumen)
+
+                self.after(0, _finish)
+            except Exception as e:
+                def _err():
+                    self._running = False
+                    self._habilitar_controles()
+                    self.log_fn(f"❌ Excepción en carga masiva: {e}")
+                    messagebox.showerror("Error en Carga Masiva", f"Ocurrió un error inesperado:\n\n{e}")
+
+                self.after(0, _err)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _detener(self):
+        if self.cargador:
+            self.cargador.cancelar()
+        self.log_fn("⏹ Solicitando cancelación de la carga masiva...")
+        self.btn_detener.configure(state="disabled")
+
+    def _deshabilitar_controles(self):
+        self.btn_prueba.configure(state="disabled")
+        self.btn_masiva.configure(state="disabled")
+        self.btn_csv.configure(state="disabled")
+        self.btn_prev.configure(state="disabled")
+        self.btn_next.configure(state="disabled")
+        self.combo_jump.configure(state="disabled")
+        self.btn_detener.configure(state="normal")
+
+    def _habilitar_controles(self):
+        has_items = bool(self._items)
+        self.btn_prueba.configure(state="normal" if has_items else "disabled")
+        self.btn_masiva.configure(state="normal" if has_items else "disabled")
+        self.btn_csv.configure(state="normal")
+        self.btn_prev.configure(state="normal" if has_items and self._idx_preview > 0 else "disabled")
+        self.btn_next.configure(state="normal" if has_items and self._idx_preview < len(self._items) - 1 else "disabled")
+        self.combo_jump.configure(state="normal" if has_items else "disabled")
+        self.btn_detener.configure(state="disabled")
+
+    def _log_safe(self, msg):
+        self.after(0, lambda: self.log_fn(msg))
+
+    def _progress_safe(self, cur, tot):
+        def _update():
+            pct = (cur / tot) if tot else 0
+            self.progress_bar.set(pct)
+            self.lbl_pct.configure(text=f"{int(pct * 100)}%")
+            self.lbl_progreso.configure(text=f"[{cur} / {tot}] procesados ({int(pct * 100)}%)")
+
+        self.after(0, _update)
+
+
+# ══════════════════════════════════════════════════════════════
 # Aplicación principal
 # ══════════════════════════════════════════════════════════════
 
@@ -2708,6 +3409,7 @@ class CatalogadorApp(ctk.CTk):
             ("catalogar", "🤖  Catalogar"),
             ("exportar", "📤  Exportar"),
             ("relaciones", "🔗  Relaciones (BETA - NO USAR)"),
+            ("siges", "📋  Carga SIGES"),
         ]
 
         for key, label in secciones:
@@ -2775,6 +3477,11 @@ class CatalogadorApp(ctk.CTk):
             get_config=self._get_config,
         )
 
+        self.frames["siges"] = CargaSigesFrame(
+            self.content_area, log_fn=self.log,
+            get_config=self._get_config,
+        )
+
         for frame in self.frames.values():
             frame.pack_forget()
 
@@ -2808,6 +3515,8 @@ class CatalogadorApp(ctk.CTk):
             self.frames["exportar"].actualizar_estado()
         elif key == "proyecto":
             self.frames["proyecto"].actualizar_estado()
+        elif key == "siges":
+            self.frames["siges"].actualizar_estado()
 
         # Ajustes usa color dimmer en la sidebar
         ajustes_btn = self.nav_buttons.get("ajustes")
@@ -2826,7 +3535,13 @@ class CatalogadorApp(ctk.CTk):
     def _get_config(self):
         """Retorna dict con todos los valores de configuración."""
         af = self.frames["ajustes"]
-        return {key: af.obtener_valor(key) for key in af.campos}
+        cfg = {key: af.obtener_valor(key) for key in af.campos}
+        if os.path.exists(ENV_PATH):
+            load_dotenv(ENV_PATH, override=False)
+        cfg["DSPACE_SIGES_COLLECTION_UUID"] = os.getenv(
+            "DSPACE_SIGES_COLLECTION_UUID", DEFAULT_SIGES_COLLECTION_UUID
+        )
+        return cfg
 
     # ------------------------------------------------------------------
     # Log
