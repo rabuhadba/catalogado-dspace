@@ -168,3 +168,4 @@ Columnas:
 3. **Prueba de Ítem Individual:** Presionar `🧪 Cargar solo este proyecto (Prueba)` y verificar que DSpace devuelve HTTP 201/200 con un Handle accesible.
 4. **Carga Masiva:** Iniciar carga, detener a voluntad con `⏹ Detener`, y revisar que la bitácora contiene los UUIDs y Handles de los ítems creados.
 5. **No Regresión:** Los módulos existentes de *Proyecto*, *Catalogar*, *Exportar* y *Relaciones* continúan funcionando intactos.
+

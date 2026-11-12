@@ -584,3 +584,4 @@ Expected: `Auth OK: True`
 git add Catalogador_DSpace.spec tests/test_cargador_siges.py
 git commit -m "chore(siges): verify integration and sync distribution spec"
 ```
+
