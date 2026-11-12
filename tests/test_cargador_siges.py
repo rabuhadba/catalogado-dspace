@@ -220,7 +220,7 @@ class TestCargadorSigesParsing(unittest.TestCase):
             self.assertTrue(os.path.exists(log_path))
             self.assertEqual(progress_calls, [(1, 3), (2, 3), (3, 3)])
 
-            with open(log_path, "r", encoding="utf-8") as f:
+            with open(log_path, "r", encoding="utf-8-sig") as f:
                 lines = [line.strip() for line in f.readlines() if line.strip()]
 
             # Header verification
@@ -259,7 +259,7 @@ class TestCargadorSigesParsing(unittest.TestCase):
             self.assertEqual(err, 0)
             self.assertTrue(os.path.exists(log_path))
 
-            with open(log_path, "r", encoding="utf-8") as f:
+            with open(log_path, "r", encoding="utf-8-sig") as f:
                 lines = [line.strip() for line in f.readlines() if line.strip()]
 
             # Header + 1 item row = 2 lines

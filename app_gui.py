@@ -2902,10 +2902,11 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
 
             # Actualizar dropdown de navegación rápida
             if items:
-                opciones = [
-                    f"{i + 1}. [{it.get('fia.iniciativa', 'S/C')}] {it.get('dc.title', 'Sin título')[:40]}"
-                    for i, it in enumerate(items)
-                ]
+                opciones = []
+                for i, it in enumerate(items):
+                    inic = str(it.get("fia.iniciativa") or "S/C").strip()
+                    title = str(it.get("dc.title") or "Sin título").strip()
+                    opciones.append(f"{i + 1}. [{inic}] {title[:40]}")
                 self.combo_jump.configure(values=opciones)
                 self.combo_jump.set(opciones[0])
                 self.btn_prueba.configure(state="normal")
@@ -3181,16 +3182,18 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
         current_len = 0
 
         for val in items:
-            if current_len + len(val) > 75 and current_len > 0:
+            val_display = (val[:80] + "...") if len(val) > 80 else val
+            if current_len + len(val_display) > 75 and current_len > 0:
                 current_row = ctk.CTkFrame(container, fg_color="transparent")
                 current_row.pack(fill="x", pady=1)
                 current_len = 0
             pill = ctk.CTkLabel(
-                current_row, text=f" {val} ", font=(FONT_FAMILY, 10, "bold"),
+                current_row, text=f" {val_display} ", font=(FONT_FAMILY, 10, "bold"),
                 fg_color=pill_color, text_color=text_color, corner_radius=10, height=22,
+                wraplength=700,
             )
             pill.pack(side="left", padx=(0, 5), pady=2)
-            current_len += len(val) + 6
+            current_len += len(val_display) + 6
 
     # ------------------------------------------------------------------
     # Acciones de Subida: Prueba y Masiva
@@ -3537,7 +3540,7 @@ class CatalogadorApp(ctk.CTk):
         af = self.frames["ajustes"]
         cfg = {key: af.obtener_valor(key) for key in af.campos}
         if os.path.exists(ENV_PATH):
-            load_dotenv(ENV_PATH, override=False)
+            load_dotenv(ENV_PATH, override=True)
         cfg["DSPACE_SIGES_COLLECTION_UUID"] = os.getenv(
             "DSPACE_SIGES_COLLECTION_UUID", DEFAULT_SIGES_COLLECTION_UUID
         )

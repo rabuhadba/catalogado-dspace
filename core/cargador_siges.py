@@ -294,7 +294,7 @@ class CargadorSiges:
         now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         log_path = os.path.join(target_dir, f"registro_carga_siges_{now_str}.csv")
 
-        with open(log_path, "w", encoding="utf-8", newline="") as f_log:
+        with open(log_path, "w", encoding="utf-8-sig", newline="") as f_log:
             writer = csv.writer(f_log, delimiter=";")
             writer.writerow(["Timestamp", "Fila", "Iniciativa", "Titulo", "Handle_o_UUID", "Estado", "Detalle"])
 
@@ -304,8 +304,8 @@ class CargadorSiges:
                     break
 
                 fila = item.get("_fila", idx)
-                inic = item.get("fia.iniciativa", f"Item-{idx}")
-                title = item.get("dc.title", "(Sin título)")
+                inic = str(item.get("fia.iniciativa") or f"Item-{idx}").strip()
+                title = str(item.get("dc.title") or "(Sin título)").strip()
 
                 self.log(f"[{idx}/{total}] Procesando iniciativa: {inic} - {title[:50]}...")
                 self.progress(idx, total)
