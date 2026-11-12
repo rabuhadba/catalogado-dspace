@@ -23,6 +23,12 @@ MULTIVALUE_FIELDS = {
     "fia.tema",
 }
 
+# Normalización de nombres de columnas que en DSpace están registrados sin tilde o con variante
+FIELD_ALIASES = {
+    "fia.participante-individual-consultoría": "fia.participante-individual-consultoria",
+    "fia.participante-individual-consultor\u00eda": "fia.participante-individual-consultoria",
+}
+
 
 class CargadorSiges:
     """Motor de carga e ingestión para iniciativas SIGES a DSpace 7."""
@@ -118,7 +124,8 @@ class CargadorSiges:
         }
 
         for col, val in item_dict.items():
-            if col.startswith("_") or col.lower() == "id" or col == "dc.type":
+            col_norm = col.lstrip("\ufeff").strip()
+            if col_norm.startswith("_") or col_norm.lower() == "id" or col_norm == "dc.type":
                 continue
             if val is None:
                 continue
@@ -126,14 +133,16 @@ class CargadorSiges:
             if not val_str or val_str.lower() == "nan":
                 continue
 
+            target_col = FIELD_ALIASES.get(col_norm, col_norm)
+
             # Multivaluado
-            if col in MULTIVALUE_FIELDS or "||" in val_str or "| |" in val_str:
+            if target_col in MULTIVALUE_FIELDS or col_norm in MULTIVALUE_FIELDS or "||" in val_str or "| |" in val_str:
                 val_limpio = val_str.replace("| |", "||")
                 subvalores = [v.strip() for v in val_limpio.split("||") if v.strip()]
                 if subvalores:
-                    metadatos[col] = [{"value": v} for v in subvalores]
+                    metadatos[target_col] = [{"value": v} for v in subvalores]
             else:
-                metadatos[col] = [{"value": val_str}]
+                metadatos[target_col] = [{"value": val_str}]
 
         return metadatos
 
@@ -239,6 +248,14 @@ class CargadorSiges:
                     self.log(f"  ❌ {err_msg}")
                     return False, "", err_msg
 
+            # 2.5 Conceder licencia de depósito en el WorkspaceItem (requerido por DSpace 7)
+            ws_patch_url = f"{self.dspace_url}/submission/workspaceitems/{ws_id}"
+            patch_license = [{"op": "add", "path": "/sections/license/granted", "value": True}]
+            try:
+                self.session.patch(ws_patch_url, headers=patch_headers, json=patch_license, timeout=30)
+            except Exception as e:
+                self.log(f"  ⚠️ Advertencia concediendo licencia en WorkspaceItem: {e}")
+
             # 3. Depositar WorkspaceItem para publicación directa
             wf_url = f"{self.dspace_url}/workflow/workflowitems"
             wf_headers = {
@@ -255,9 +272,10 @@ class CargadorSiges:
 
             handle = ""
             try:
-                wf_data = resp_wf.json()
-                item_obj = wf_data.get("_embedded", {}).get("item", {})
-                handle = item_obj.get("handle") or ""
+                if resp_wf.text and resp_wf.text.strip():
+                    wf_data = resp_wf.json()
+                    item_obj = wf_data.get("_embedded", {}).get("item", {})
+                    handle = item_obj.get("handle") or ""
             except Exception:
                 pass
 

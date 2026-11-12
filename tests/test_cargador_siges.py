@@ -97,6 +97,23 @@ class TestCargadorSigesParsing(unittest.TestCase):
             [{"value": "Beneficiario 1"}, {"value": "Beneficiario 2"}]
         )
 
+    def test_preparar_metadatos_field_alias_normalization(self):
+        item = {
+            "dc.title": "Proyecto con columna con tilde",
+            "fia.participante-individual-consultoría": "Juan Pérez || María Soto",
+            "\ufeffId": "500",
+        }
+        meta = self.cargador.preparar_metadatos_dspace(item)
+        # Debe haberse mapeado a 'fia.participante-individual-consultoria' (sin tilde)
+        self.assertNotIn("fia.participante-individual-consultoría", meta)
+        self.assertIn("fia.participante-individual-consultoria", meta)
+        self.assertEqual(
+            meta["fia.participante-individual-consultoria"],
+            [{"value": "Juan Pérez"}, {"value": "María Soto"}]
+        )
+        self.assertNotIn("\ufeffId", meta)
+        self.assertNotIn("Id", meta)
+
     def test_iniciar_sesion_success(self):
         mock_session = MagicMock()
         mock_login_resp = MagicMock(status_code=200)
