@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('core', 'core'), ('prompt_sistema.txt', '.')]
 binaries = []
-hiddenimports = ['pandas', 'PIL', 'openai', 'requests', 'dotenv', 'customtkinter', 're', 'shutil', 'datetime']
+hiddenimports = ['pandas', 'PIL', 'openai', 'requests', 'dotenv', 'customtkinter', 're', 'shutil', 'datetime', 'core.cargador_siges']
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 

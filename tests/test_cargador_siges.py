@@ -267,6 +267,15 @@ class TestCargadorSigesParsing(unittest.TestCase):
             self.assertIn(";2;COC-2026-0001;Proyecto 1;", lines[1])
             self.assertNotIn("COC-2026-0002", "\n".join(lines))
 
+    def test_leer_carga_siges_real_si_existe(self):
+        csv_path = "carga_siges.csv"
+        if not os.path.exists(csv_path):
+            self.skipTest(f"{csv_path} no encontrado en la raíz del repositorio")
+        items, stats = self.cargador.leer_csv(csv_path)
+        self.assertGreater(len(items), 400)
+        self.assertGreater(stats["validos"], 400)
+        self.assertEqual(items[0]["fia.iniciativa"], "COC-2026-0001")
+
 
 
 if __name__ == "__main__":
