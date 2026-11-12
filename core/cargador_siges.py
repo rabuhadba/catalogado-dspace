@@ -120,17 +120,20 @@ class CargadorSiges:
         for col, val in item_dict.items():
             if col.startswith("_") or col.lower() == "id" or col == "dc.type":
                 continue
-            if not val:
+            if val is None:
+                continue
+            val_str = str(val).strip()
+            if not val_str or val_str.lower() == "nan":
                 continue
 
             # Multivaluado
-            if col in MULTIVALUE_FIELDS or "||" in val or "| |" in val:
-                val_limpio = val.replace("| |", "||")
+            if col in MULTIVALUE_FIELDS or "||" in val_str or "| |" in val_str:
+                val_limpio = val_str.replace("| |", "||")
                 subvalores = [v.strip() for v in val_limpio.split("||") if v.strip()]
                 if subvalores:
                     metadatos[col] = [{"value": v} for v in subvalores]
             else:
-                metadatos[col] = [{"value": val}]
+                metadatos[col] = [{"value": val_str}]
 
         return metadatos
 
@@ -232,7 +235,9 @@ class CargadorSiges:
             if patch_ops:
                 resp_patch = self.session.patch(patch_url, headers=patch_headers, json=patch_ops, timeout=40)
                 if resp_patch.status_code != 200:
-                    self.log(f"  ⚠️ Advertencia: Algunos metadatos no fueron aceptados: HTTP {resp_patch.status_code}")
+                    err_msg = f"Error aplicando metadatos: HTTP {resp_patch.status_code} - {getattr(resp_patch, 'text', '')[:100]}"
+                    self.log(f"  ❌ {err_msg}")
+                    return False, "", err_msg
 
             # 3. Depositar WorkspaceItem para publicación directa
             wf_url = f"{self.dspace_url}/workflow/workflowitems"

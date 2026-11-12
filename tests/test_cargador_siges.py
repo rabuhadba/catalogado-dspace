@@ -150,6 +150,53 @@ class TestCargadorSigesParsing(unittest.TestCase):
         self.assertEqual(handle_url, "https://bibliotecadigital.fia.cl/handle/20.500.11944/9999")
         self.assertIn("Publicado exitosamente", msg)
 
+    def test_preparar_metadatos_non_string_resiliency(self):
+        item = {
+            "dc.title": "Proyecto con tipos no string",
+            "dc.date.issued": 2026,
+            "fia.clasificacionlocal": None,
+            "fia.equipo-tecnico": 12345,
+            "_fila": 2
+        }
+        meta = self.cargador.preparar_metadatos_dspace(item)
+        self.assertEqual(meta["dc.date.issued"], [{"value": "2026"}])
+        self.assertEqual(meta["fia.equipo-tecnico"], [{"value": "12345"}])
+        self.assertNotIn("fia.clasificacionlocal", meta)
+
+    def test_cargar_un_item_patch_metadata_failure_aborts_deposit(self):
+        self.cargador.token = "Bearer test-token"
+        self.cargador.csrf_token = "csrf-test"
+        mock_session = MagicMock()
+        self.cargador.session = mock_session
+
+        # 1. ws item post response
+        resp_ws = MagicMock(status_code=201)
+        resp_ws.json.return_value = {
+            "id": 999,
+            "_embedded": {"item": {"id": "item-uuid-1234"}}
+        }
+
+        # 2. patch failure response (e.g. 422 Unprocessable Entity)
+        resp_patch = MagicMock(status_code=422)
+        resp_patch.text = "Metadata schema validation failed"
+
+        mock_session.post.return_value = resp_ws
+        mock_session.patch.return_value = resp_patch
+
+        item = {
+            "_fila": 2,
+            "_es_valido": True,
+            "fia.iniciativa": "COC-2026-0001",
+            "dc.title": "Proyecto Test Ingest"
+        }
+
+        ok, handle_url, msg = self.cargador.cargar_un_item(item)
+        self.assertFalse(ok)
+        self.assertEqual(handle_url, "")
+        self.assertIn("Error aplicando metadatos: HTTP 422", msg)
+        # Verify workflow deposit was NOT called (mock_session.post called only once for ws)
+        self.assertEqual(mock_session.post.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
