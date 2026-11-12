@@ -267,6 +267,33 @@ class TestCargadorSigesParsing(unittest.TestCase):
             self.assertIn(";2;COC-2026-0001;Proyecto 1;", lines[1])
             self.assertNotIn("COC-2026-0002", "\n".join(lines))
 
+    def test_cargar_lote_omitir_iniciativas(self):
+        items = [
+            {"_fila": 2, "fia.iniciativa": "COC-2026-0001", "dc.title": "Proyecto 1 (Omitido)"},
+            {"_fila": 3, "fia.iniciativa": "COC-2026-0002", "dc.title": "Proyecto 2 (Cargado)"},
+        ]
+        cargar_calls = []
+
+        def fake_cargar_un_item(item, collection_uuid=None):
+            cargar_calls.append(item["fia.iniciativa"])
+            return True, "https://bibliotecadigital.fia.cl/handle/20.500.11944/test", "Publicado."
+
+        self.cargador.cargar_un_item = fake_cargar_un_item
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ok, err, log_path = self.cargador.cargar_lote(
+                items, output_dir=tmpdir, omitir_iniciativas={"COC-2026-0001"}
+            )
+            # Solo el ítem 2 debió ser cargado; el 1 debió ser omitido
+            self.assertEqual(ok, 1)
+            self.assertEqual(err, 0)
+            self.assertEqual(cargar_calls, ["COC-2026-0002"])
+
+            with open(log_path, "r", encoding="utf-8-sig") as f:
+                content = f.read()
+            self.assertIn(";2;COC-2026-0001;Proyecto 1 (Omitido);;OMITIDO;Subido previamente en sesión", content)
+            self.assertIn(";3;COC-2026-0002;Proyecto 2 (Cargado);https://bibliotecadigital.fia.cl/handle/20.500.11944/test;EXITOSO;Publicado.", content)
+
     def test_leer_carga_siges_real_si_existe(self):
         csv_path = "carga_siges.csv"
         if not os.path.exists(csv_path):

@@ -2676,6 +2676,7 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
         self._idx_preview = 0
         self._csv_path = None
         self._running = False
+        self._iniciativas_subidas = {}  # {fia.iniciativa: handle_str} para evitar duplicados en sesión
 
         self._crear_ui()
         self.actualizar_estado()
@@ -3010,6 +3011,17 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
         )
         lbl_val.pack(side="right")
 
+        # ── Banner si ya fue subida en esta sesión ──
+        if inic in self._iniciativas_subidas:
+            handle_prev = self._iniciativas_subidas[inic]
+            banner_subido = ctk.CTkFrame(self.prev_body, fg_color="#0e2a1b", corner_radius=6)
+            banner_subido.pack(fill="x", padx=12, pady=(0, 8))
+            ctk.CTkLabel(
+                banner_subido,
+                text=f"✅  YA SUBIDA EN ESTA SESIÓN  —  {handle_prev}",
+                font=(FONT_FAMILY, 11, "bold"), text_color="#2ecc71",
+            ).pack(anchor="w", padx=12, pady=6)
+
         # ── 1. Información General ──
         sec1 = ctk.CTkFrame(self.prev_body, fg_color="#10101e", corner_radius=6)
         sec1.pack(fill="x", padx=12, pady=(0, 8))
@@ -3247,8 +3259,14 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
                     self.btn_prueba.configure(state="normal", text="🧪  Cargar solo este proyecto (Prueba)")
                     self.btn_masiva.configure(state="normal")
                     if ok:
+                        self._iniciativas_subidas[inic] = handle_str
+                        self._construir_ficha(item)
                         self.log_fn(f"✅ Iniciativa {inic} publicada con éxito -> {handle_str}")
-                        messagebox.showinfo("Prueba Exitosa", f"Iniciativa {inic} publicada con éxito.\n\nHandle: {handle_str}")
+                        messagebox.showinfo(
+                            "Prueba Exitosa",
+                            f"Iniciativa {inic} publicada con éxito.\n\nHandle: {handle_str}\n\n"
+                            "ℹ️ Quedó registrada en la sesión para omitirse automáticamente en la carga masiva."
+                        )
                     else:
                         self.log_fn(f"❌ Error al cargar {inic}: {msg}")
                         messagebox.showerror("Error en Prueba", f"Error al cargar iniciativa {inic}:\n\n{msg}")
@@ -3274,11 +3292,20 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
             return
 
         n = len(self._items)
-        confirm = messagebox.askyesno(
-            "Confirmar Carga",
+        omitir = set(self._iniciativas_subidas.keys())
+        n_omitir = len([it for it in self._items if str(it.get("fia.iniciativa", "")).strip() in omitir])
+
+        msg_confirm = (
             f"¿Deseas iniciar la carga masiva de {n} iniciativas a DSpace SIGES?\n\n"
-            f"Colección destino: {col_uuid}",
+            f"Colección destino: {col_uuid}"
         )
+        if n_omitir > 0:
+            msg_confirm += (
+                f"\n\nℹ️ Se omitirán automáticamente {n_omitir} iniciativa(s) ya subida(s) "
+                f"en esta sesión (como tu prueba) para evitar duplicados."
+            )
+
+        confirm = messagebox.askyesno("Confirmar Carga", msg_confirm)
         if not confirm:
             return
 
@@ -3296,6 +3323,7 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
                     self._items,
                     collection_uuid=col_uuid,
                     output_dir=output_dir,
+                    omitir_iniciativas=omitir,
                 )
 
                 def _finish():

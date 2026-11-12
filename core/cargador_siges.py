@@ -276,7 +276,7 @@ class CargadorSiges:
         except Exception as e:
             return False, "", f"Excepción durante la ingestión: {e}"
 
-    def cargar_lote(self, items, collection_uuid=None, output_dir=None):
+    def cargar_lote(self, items, collection_uuid=None, output_dir=None, omitir_iniciativas=None):
         """
         Carga secuencialmente una lista de ítems a la colección SIGES.
         Registra cada operación en un archivo de bitácora CSV.
@@ -286,6 +286,8 @@ class CargadorSiges:
         total = len(items)
         exitosos = 0
         errores = 0
+        omitidos = 0
+        omitidos_set = set(omitir_iniciativas or [])
 
         target_dir = output_dir or os.getcwd()
         if not os.path.exists(target_dir):
@@ -307,6 +309,17 @@ class CargadorSiges:
                 inic = str(item.get("fia.iniciativa") or f"Item-{idx}").strip()
                 title = str(item.get("dc.title") or "(Sin título)").strip()
 
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                # Omitir si ya fue subido previamente en esta sesión
+                if inic in omitidos_set:
+                    omitidos += 1
+                    self.log(f"[{idx}/{total}] ⏭️ Omitiendo {inic} (ya subido previamente en esta sesión)")
+                    self.progress(idx, total)
+                    writer.writerow([timestamp, fila, inic, title, "", "OMITIDO", "Subido previamente en sesión"])
+                    f_log.flush()
+                    continue
+
                 self.log(f"[{idx}/{total}] Procesando iniciativa: {inic} - {title[:50]}...")
                 self.progress(idx, total)
 
@@ -315,7 +328,6 @@ class CargadorSiges:
                 except Exception as e:
                     ok, handle_str, msg = False, "", f"Excepción durante la ingestión: {e}"
 
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 if ok:
                     exitosos += 1
                     self.log(f"  ✅ {inic} publicada -> {handle_str}")
@@ -328,7 +340,7 @@ class CargadorSiges:
                 f_log.flush()
 
         self.log(f"\n{'=' * 55}")
-        self.log(f"  RESUMEN SIGES: {exitosos} exitosos, {errores} errores de {total} totales.")
+        self.log(f"  RESUMEN SIGES: {exitosos} exitosos, {errores} errores, {omitidos} omitidos de {total} totales.")
         self.log(f"  Bitácora guardada en: {log_path}")
         self.log(f"{'=' * 55}")
 
