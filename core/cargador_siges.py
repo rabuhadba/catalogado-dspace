@@ -275,3 +275,62 @@ class CargadorSiges:
 
         except Exception as e:
             return False, "", f"Excepción durante la ingestión: {e}"
+
+    def cargar_lote(self, items, collection_uuid=None, output_dir=None):
+        """
+        Carga secuencialmente una lista de ítems a la colección SIGES.
+        Registra cada operación en un archivo de bitácora CSV.
+        Retorna (exitosos, errores, ruta_bitacora).
+        """
+        self.reset()
+        total = len(items)
+        exitosos = 0
+        errores = 0
+
+        target_dir = output_dir or os.getcwd()
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
+
+        now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = os.path.join(target_dir, f"registro_carga_siges_{now_str}.csv")
+
+        with open(log_path, "w", encoding="utf-8", newline="") as f_log:
+            writer = csv.writer(f_log, delimiter=";")
+            writer.writerow(["Timestamp", "Fila", "Iniciativa", "Titulo", "Handle_o_UUID", "Estado", "Detalle"])
+
+            for idx, item in enumerate(items, 1):
+                if self._cancelado:
+                    self.log("\n⏹ Carga masiva detenida por el usuario.")
+                    break
+
+                fila = item.get("_fila", idx)
+                inic = item.get("fia.iniciativa", f"Item-{idx}")
+                title = item.get("dc.title", "(Sin título)")
+
+                self.log(f"[{idx}/{total}] Procesando iniciativa: {inic} - {title[:50]}...")
+                self.progress(idx, total)
+
+                try:
+                    ok, handle_str, msg = self.cargar_un_item(item, collection_uuid=collection_uuid)
+                except Exception as e:
+                    ok, handle_str, msg = False, "", f"Excepción durante la ingestión: {e}"
+
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if ok:
+                    exitosos += 1
+                    self.log(f"  ✅ {inic} publicada -> {handle_str}")
+                    writer.writerow([timestamp, fila, inic, title, handle_str, "EXITOSO", msg])
+                else:
+                    errores += 1
+                    self.log(f"  ❌ Error en {inic}: {msg}")
+                    writer.writerow([timestamp, fila, inic, title, handle_str, "ERROR", msg])
+
+                f_log.flush()
+
+        self.log(f"\n{'=' * 55}")
+        self.log(f"  RESUMEN SIGES: {exitosos} exitosos, {errores} errores de {total} totales.")
+        self.log(f"  Bitácora guardada en: {log_path}")
+        self.log(f"{'=' * 55}")
+
+        return exitosos, errores, log_path
+

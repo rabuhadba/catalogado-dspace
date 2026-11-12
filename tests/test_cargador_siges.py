@@ -197,6 +197,77 @@ class TestCargadorSigesParsing(unittest.TestCase):
         # Verify workflow deposit was NOT called (mock_session.post called only once for ws)
         self.assertEqual(mock_session.post.call_count, 1)
 
+    def test_cargar_lote_mock(self):
+        items = [
+            {"_fila": 2, "fia.iniciativa": "COC-2026-0001", "dc.title": "Proyecto 1"},
+            {"_fila": 3, "fia.iniciativa": "COC-2026-0002", "dc.title": "Proyecto 2 (Falla)"},
+            {"_fila": 4, "fia.iniciativa": "COC-2026-0003", "dc.title": "Proyecto 3"}
+        ]
+        progress_calls = []
+        self.cargador.progress = lambda cur, tot: progress_calls.append((cur, tot))
+
+        def fake_cargar_un_item(item, collection_uuid=None):
+            if item["fia.iniciativa"] == "COC-2026-0002":
+                return False, "", "Error de metadatos"
+            return True, f"https://bibliotecadigital.fia.cl/handle/20.500.11944/{item['_fila']}", "Publicado exitosamente."
+
+        self.cargador.cargar_un_item = fake_cargar_un_item
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ok, err, log_path = self.cargador.cargar_lote(items, output_dir=tmpdir)
+            self.assertEqual(ok, 2)
+            self.assertEqual(err, 1)
+            self.assertTrue(os.path.exists(log_path))
+            self.assertEqual(progress_calls, [(1, 3), (2, 3), (3, 3)])
+
+            with open(log_path, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+
+            # Header verification
+            self.assertEqual(
+                lines[0],
+                "Timestamp;Fila;Iniciativa;Titulo;Handle_o_UUID;Estado;Detalle"
+            )
+            self.assertEqual(len(lines), 4)
+
+            # Item 1 verification
+            self.assertIn(";2;COC-2026-0001;Proyecto 1;https://bibliotecadigital.fia.cl/handle/20.500.11944/2;EXITOSO;Publicado exitosamente.", lines[1])
+            # Item 2 verification
+            self.assertIn(";3;COC-2026-0002;Proyecto 2 (Falla);;ERROR;Error de metadatos", lines[2])
+            # Item 3 verification
+            self.assertIn(";4;COC-2026-0003;Proyecto 3;https://bibliotecadigital.fia.cl/handle/20.500.11944/4;EXITOSO;Publicado exitosamente.", lines[3])
+
+    def test_cargar_lote_cancellation(self):
+        items = [
+            {"_fila": 2, "fia.iniciativa": "COC-2026-0001", "dc.title": "Proyecto 1"},
+            {"_fila": 3, "fia.iniciativa": "COC-2026-0002", "dc.title": "Proyecto 2"},
+            {"_fila": 4, "fia.iniciativa": "COC-2026-0003", "dc.title": "Proyecto 3"}
+        ]
+
+        def fake_cargar_un_item(item, collection_uuid=None):
+            # Cancel immediately after first item finishes
+            if item["fia.iniciativa"] == "COC-2026-0001":
+                self.cargador.cancelar()
+            return True, f"https://bibliotecadigital.fia.cl/handle/20.500.11944/{item['_fila']}", "Publicado exitosamente."
+
+        self.cargador.cargar_un_item = fake_cargar_un_item
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ok, err, log_path = self.cargador.cargar_lote(items, output_dir=tmpdir)
+            # Only the first item should have been processed
+            self.assertEqual(ok, 1)
+            self.assertEqual(err, 0)
+            self.assertTrue(os.path.exists(log_path))
+
+            with open(log_path, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+
+            # Header + 1 item row = 2 lines
+            self.assertEqual(len(lines), 2)
+            self.assertIn(";2;COC-2026-0001;Proyecto 1;", lines[1])
+            self.assertNotIn("COC-2026-0002", "\n".join(lines))
+
+
 
 if __name__ == "__main__":
     unittest.main()
