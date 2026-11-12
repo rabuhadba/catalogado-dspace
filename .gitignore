@@ -39,3 +39,4 @@ $RECYCLE.BIN/
 *.log
 *.lock
 .~lock.*
+*.csv
