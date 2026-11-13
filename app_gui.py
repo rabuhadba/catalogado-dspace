@@ -34,6 +34,7 @@ from core.cargador_siges import (
     CargadorSiges,
     DEFAULT_SIGES_COLLECTION_UUID,
     MULTIVALUE_FIELDS,
+    leer_iniciativas_exitosas_de_bitacora,
 )
 
 # ══════════════════════════════════════════════════════════════
@@ -2706,11 +2707,18 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
         row_file.pack(fill="x", padx=15, pady=(0, 8))
 
         self.btn_csv = ctk.CTkButton(
-            row_file, text="📂  Seleccionar CSV SIGES", width=200, height=36,
+            row_file, text="📂  Seleccionar CSV SIGES", width=190, height=36,
             font=(FONT_FAMILY, 12, "bold"), fg_color="#333", hover_color="#444",
             command=self._seleccionar_csv,
         )
-        self.btn_csv.pack(side="left", padx=(0, 12))
+        self.btn_csv.pack(side="left", padx=(0, 8))
+
+        self.btn_bitacora = ctk.CTkButton(
+            row_file, text="📑  Cargar Bitácora Previa", width=180, height=36,
+            font=(FONT_FAMILY, 12, "bold"), fg_color="#202034", hover_color="#2c2c48",
+            command=self._seleccionar_bitacora,
+        )
+        self.btn_bitacora.pack(side="left", padx=(0, 12))
 
         self.lbl_csv_nombre = ctk.CTkLabel(
             row_file, text="(Ningún archivo seleccionado)",
@@ -2745,7 +2753,13 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
             row_stats, text="⚠️ Con advertencias: 0", font=(FONT_FAMILY, 12, "bold"),
             text_color="#f39c12", fg_color="#18182a", corner_radius=6, padx=14, pady=6,
         )
-        self.badge_advertencias.pack(side="left")
+        self.badge_advertencias.pack(side="left", padx=(0, 10))
+
+        self.badge_omitidas = ctk.CTkLabel(
+            row_stats, text="⏭️ Ya subidas: 0", font=(FONT_FAMILY, 12, "bold"),
+            text_color="#3498db", fg_color="#18182a", corner_radius=6, padx=14, pady=6,
+        )
+        self.badge_omitidas.pack(side="left")
 
         # Nota de integridad
         ctk.CTkLabel(
@@ -2874,6 +2888,34 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
     # Carga de CSV
     # ------------------------------------------------------------------
 
+    def _seleccionar_bitacora(self):
+        ruta = filedialog.askopenfilename(
+            title="Seleccionar Bitácora Previa de Carga SIGES",
+            filetypes=[("Archivos CSV", "*.csv"), ("Todos los archivos", "*.*")],
+        )
+        if not ruta:
+            return
+
+        cargadas = leer_iniciativas_exitosas_de_bitacora(ruta)
+        if not cargadas:
+            messagebox.showwarning(
+                "Bitácora Vacía o Sin Éxitos",
+                "No se encontraron iniciativas con estado EXITOSO en el archivo seleccionado."
+            )
+            return
+
+        self._iniciativas_subidas.update(cargadas)
+        self.badge_omitidas.configure(text=f"⏭️ Ya subidas: {len(self._iniciativas_subidas)}")
+        if self._items and 0 <= self._idx_preview < len(self._items):
+            self._construir_ficha(self._items[self._idx_preview])
+
+        self.log_fn(f"📑 Bitácora cargada: {len(cargadas)} iniciativas exitosas reconocidas para omitir duplicados.")
+        messagebox.showinfo(
+            "Bitácora Cargada",
+            f"Se registraron {len(cargadas)} iniciativas como ya publicadas con éxito en DSpace.\n\n"
+            "Estas serán omitidas automáticamente en la carga masiva para evitar duplicados."
+        )
+
     def _seleccionar_csv(self):
         ruta = filedialog.askopenfilename(
             title="Seleccionar archivo CSV SIGES",
@@ -2896,10 +2938,35 @@ class CargaSigesFrame(ctk.CTkScrollableFrame):
             self._items = items
             self._idx_preview = 0
 
+            # Detección automática de bitácoras previas en el mismo directorio
+            dir_csv = os.path.dirname(ruta) or "."
+            import glob
+            patron = os.path.join(dir_csv, "registro_carga_siges_*.csv")
+            bitacoras = glob.glob(patron)
+            if bitacoras:
+                bitacoras.sort(key=os.path.getmtime, reverse=True)
+                ultima_bitacora = bitacoras[0]
+                previas_ok = leer_iniciativas_exitosas_de_bitacora(ultima_bitacora)
+                coincidentes = {
+                    inic: h for inic, h in previas_ok.items()
+                    if any(str(it.get("fia.iniciativa", "")).strip() == inic for it in items)
+                }
+                if coincidentes:
+                    preguntar = messagebox.askyesno(
+                        "Reanudar Carga Previa",
+                        f"Se detectó una bitácora previa reciente:\n{os.path.basename(ultima_bitacora)}\n\n"
+                        f"Contiene {len(coincidentes)} iniciativas ya publicadas exitosamente en DSpace.\n\n"
+                        f"¿Deseas cargarlas para omitirlas automáticamente y procesar solo las pendientes?"
+                    )
+                    if preguntar:
+                        self._iniciativas_subidas.update(coincidentes)
+                        self.log_fn(f"ℹ️ {len(coincidentes)} iniciativas reconocidas de bitácora previa para omitir.")
+
             # Actualizar tarjetas de estadística
             self.badge_total.configure(text=f"📊 Total: {stats['total']}")
             self.badge_validas.configure(text=f"✅ Válidas: {stats['validos']}")
             self.badge_advertencias.configure(text=f"⚠️ Con advertencias: {stats['advertencias']}")
+            self.badge_omitidas.configure(text=f"⏭️ Ya subidas: {len(self._iniciativas_subidas)}")
 
             # Actualizar dropdown de navegación rápida
             if items:

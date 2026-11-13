@@ -4,6 +4,7 @@ Maneja carga de CSV, validación, mapeo de metadatos y depósito directo con Han
 """
 import os
 import csv
+import time
 import datetime
 import pandas as pd
 import requests
@@ -28,6 +29,59 @@ FIELD_ALIASES = {
     "fia.participante-individual-consultoría": "fia.participante-individual-consultoria",
     "fia.participante-individual-consultor\u00eda": "fia.participante-individual-consultoria",
 }
+
+TIMEOUT_STANDARD = 90
+TIMEOUT_WORKFLOW = 120
+
+
+def leer_iniciativas_exitosas_de_bitacora(ruta_bitacora):
+    """
+    Lee una bitácora CSV previa de SIGES y extrae un diccionario
+    {iniciativa: handle_o_url} de todos los ítems con estado EXITOSO.
+    """
+    if not os.path.exists(ruta_bitacora):
+        return {}
+
+    exitosos = {}
+    for enc in ["utf-8-sig", "utf-8", "latin1", "cp1252"]:
+        try:
+            with open(ruta_bitacora, "r", encoding=enc) as f:
+                first_line = f.readline()
+                delimitador = ";" if ";" in first_line else ","
+                f.seek(0)
+                reader = csv.reader(f, delimiter=delimitador)
+                header = next(reader, None)
+                if not header:
+                    continue
+
+                header_lower = [h.strip().lower() for h in header]
+                idx_inic = -1
+                idx_estado = -1
+                idx_handle = -1
+
+                for i, h in enumerate(header_lower):
+                    if "iniciativa" in h:
+                        idx_inic = i
+                    elif "estado" in h:
+                        idx_estado = i
+                    elif "handle" in h or "uuid" in h:
+                        idx_handle = i
+
+                if idx_inic == -1 or idx_estado == -1:
+                    continue
+
+                for row in reader:
+                    if len(row) > max(idx_inic, idx_estado):
+                        estado = row[idx_estado].strip().upper()
+                        inic = row[idx_inic].strip()
+                        handle = row[idx_handle].strip() if idx_handle != -1 and len(row) > idx_handle else ""
+                        if estado == "EXITOSO" and inic:
+                            exitosos[inic] = handle or "Publicado previamente"
+                return exitosos
+        except Exception:
+            continue
+
+    return exitosos
 
 
 class CargadorSiges:
@@ -206,7 +260,8 @@ class CargadorSiges:
         ws_headers["Content-Type"] = "application/json"
 
         try:
-            resp_ws = self.session.post(ws_url, headers=ws_headers, json={}, timeout=40)
+            t0 = time.time()
+            resp_ws = self.session.post(ws_url, headers=ws_headers, json={}, timeout=TIMEOUT_STANDARD)
             # Reintento si sesión expiró
             if resp_ws.status_code == 401:
                 if not self.iniciar_sesion():
@@ -215,7 +270,7 @@ class CargadorSiges:
                 api_headers["X-XSRF-TOKEN"] = self.csrf_token
                 ws_headers["Authorization"] = self.token
                 ws_headers["X-XSRF-TOKEN"] = self.csrf_token
-                resp_ws = self.session.post(ws_url, headers=ws_headers, json={}, timeout=40)
+                resp_ws = self.session.post(ws_url, headers=ws_headers, json={}, timeout=TIMEOUT_STANDARD)
 
             if resp_ws.status_code != 201:
                 return False, "", f"Error creando WorkspaceItem: HTTP {resp_ws.status_code}"
@@ -226,7 +281,11 @@ class CargadorSiges:
             if not item_uuid:
                 return False, "", "WorkspaceItem creado pero no se encontró UUID del ítem."
 
+            t_ws = time.time() - t0
+            self.log(f"   [1/4] Borrador creado ({t_ws:.1f}s)")
+
             # 2. Aplicar Metadatos via PATCH
+            t0 = time.time()
             metadatos = self.preparar_metadatos_dspace(item_dict)
             patch_url = f"{self.dspace_url}/core/items/{item_uuid}"
             patch_headers = api_headers.copy()
@@ -242,21 +301,29 @@ class CargadorSiges:
                     })
 
             if patch_ops:
-                resp_patch = self.session.patch(patch_url, headers=patch_headers, json=patch_ops, timeout=40)
+                resp_patch = self.session.patch(patch_url, headers=patch_headers, json=patch_ops, timeout=TIMEOUT_STANDARD)
                 if resp_patch.status_code != 200:
                     err_msg = f"Error aplicando metadatos: HTTP {resp_patch.status_code} - {getattr(resp_patch, 'text', '')[:100]}"
                     self.log(f"  ❌ {err_msg}")
                     return False, "", err_msg
 
+            t_patch = time.time() - t0
+            self.log(f"   [2/4] Metadatos aplicados ({t_patch:.1f}s)")
+
             # 2.5 Conceder licencia de depósito en el WorkspaceItem (requerido por DSpace 7)
+            t0 = time.time()
             ws_patch_url = f"{self.dspace_url}/submission/workspaceitems/{ws_id}"
             patch_license = [{"op": "add", "path": "/sections/license/granted", "value": True}]
             try:
-                self.session.patch(ws_patch_url, headers=patch_headers, json=patch_license, timeout=30)
+                self.session.patch(ws_patch_url, headers=patch_headers, json=patch_license, timeout=TIMEOUT_STANDARD)
             except Exception as e:
                 self.log(f"  ⚠️ Advertencia concediendo licencia en WorkspaceItem: {e}")
 
+            t_lic = time.time() - t0
+            self.log(f"   [3/4] Licencia validada ({t_lic:.1f}s)")
+
             # 3. Depositar WorkspaceItem para publicación directa
+            t0 = time.time()
             wf_url = f"{self.dspace_url}/workflow/workflowitems"
             wf_headers = {
                 "Authorization": self.token,
@@ -265,7 +332,26 @@ class CargadorSiges:
                 "Accept": "application/json",
             }
             body_uri = f"{self.dspace_url}/submission/workspaceitems/{ws_id}"
-            resp_wf = self.session.post(wf_url, headers=wf_headers, data=body_uri, timeout=40)
+
+            resp_wf = None
+            try:
+                resp_wf = self.session.post(wf_url, headers=wf_headers, data=body_uri, timeout=TIMEOUT_WORKFLOW)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as net_err:
+                self.log(f"   ⚠️ Demora de red en publicación ({net_err}). Verificando si DSpace completó en servidor...")
+                time.sleep(3)
+                try:
+                    resp_item_check = self.session.get(f"{self.dspace_url}/core/items/{item_uuid}", headers=api_headers, timeout=30)
+                    if resp_item_check.status_code == 200:
+                        data_check = resp_item_check.json()
+                        handle_check = data_check.get("handle")
+                        if handle_check or data_check.get("inArchive"):
+                            h_url = f"https://bibliotecadigital.fia.cl/handle/{handle_check}" if handle_check else f"Item UUID: {item_uuid}"
+                            t_rec = time.time() - t0
+                            self.log(f"   [4/4] Publicado y recuperado ({t_rec:.1f}s)")
+                            return True, h_url, "Publicado exitosamente (confirmado tras recuperación)."
+                except Exception:
+                    pass
+                raise net_err
 
             if resp_wf.status_code not in [200, 201]:
                 return False, "", f"Error depositando WorkspaceItem: HTTP {resp_wf.status_code}"
@@ -282,11 +368,14 @@ class CargadorSiges:
             if not handle:
                 # Consultar item directamente si no vino en wf_data
                 try:
-                    resp_item = self.session.get(f"{self.dspace_url}/core/items/{item_uuid}", headers=api_headers, timeout=20)
+                    resp_item = self.session.get(f"{self.dspace_url}/core/items/{item_uuid}", headers=api_headers, timeout=30)
                     if resp_item.status_code == 200:
                         handle = resp_item.json().get("handle") or ""
                 except Exception:
                     pass
+
+            t_wf = time.time() - t0
+            self.log(f"   [4/4] Publicado en Solr ({t_wf:.1f}s)")
 
             handle_str = f"https://bibliotecadigital.fia.cl/handle/{handle}" if handle else f"Item UUID: {item_uuid}"
             return True, handle_str, "Publicado exitosamente."
@@ -353,9 +442,13 @@ class CargadorSiges:
                 else:
                     errores += 1
                     self.log(f"  ❌ Error en {inic}: {msg}")
-                    writer.writerow([timestamp, fila, inic, title, handle_str, "ERROR", msg])
+                    writer.writerow([timestamp, fila, inic, title, handle_str or "", "ERROR", msg])
 
                 f_log.flush()
+
+                # Pausa de respiro para que Tomcat y Solr en el servidor procesen sin saturarse
+                if idx < total and not self._cancelado:
+                    time.sleep(1.0)
 
         self.log(f"\n{'=' * 55}")
         self.log(f"  RESUMEN SIGES: {exitosos} exitosos, {errores} errores, {omitidos} omitidos de {total} totales.")

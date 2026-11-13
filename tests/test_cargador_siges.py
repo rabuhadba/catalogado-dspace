@@ -3,7 +3,12 @@ from unittest.mock import MagicMock, patch
 import os
 import tempfile
 import requests
-from core.cargador_siges import CargadorSiges, DEFAULT_SIGES_COLLECTION_UUID, MULTIVALUE_FIELDS
+from core.cargador_siges import (
+    CargadorSiges,
+    DEFAULT_SIGES_COLLECTION_UUID,
+    MULTIVALUE_FIELDS,
+    leer_iniciativas_exitosas_de_bitacora,
+)
 
 
 class TestCargadorSigesParsing(unittest.TestCase):
@@ -319,6 +324,28 @@ class TestCargadorSigesParsing(unittest.TestCase):
         self.assertGreater(len(items), 400)
         self.assertGreater(stats["validos"], 400)
         self.assertEqual(items[0]["fia.iniciativa"], "COC-2026-0001")
+
+    def test_leer_iniciativas_exitosas_de_bitacora(self):
+        log_content = (
+            "Timestamp;Fila;Iniciativa;Titulo;Handle_o_UUID;Estado;Detalle\n"
+            "2026-11-12 15:12:51;2;COC-2026-0001;Proyecto 1;https://bibliotecadigital.fia.cl/handle/20.500.11944/241065;EXITOSO;Publicado exitosamente.\n"
+            "2026-11-12 15:13:32;3;COC-2026-0002;Proyecto 2;;ERROR;Read timed out\n"
+            "2026-11-12 15:13:49;4;COC-2026-0003;Proyecto 3;https://bibliotecadigital.fia.cl/handle/20.500.11944/241067;EXITOSO;Publicado exitosamente.\n"
+        )
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv", encoding="utf-8-sig") as f:
+            f.write(log_content)
+            temp_path = f.name
+
+        try:
+            exitosos = leer_iniciativas_exitosas_de_bitacora(temp_path)
+            self.assertEqual(len(exitosos), 2)
+            self.assertIn("COC-2026-0001", exitosos)
+            self.assertIn("COC-2026-0003", exitosos)
+            self.assertNotIn("COC-2026-0002", exitosos)
+            self.assertEqual(exitosos["COC-2026-0001"], "https://bibliotecadigital.fia.cl/handle/20.500.11944/241065")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
 
 
